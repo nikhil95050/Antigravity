@@ -81,14 +81,12 @@ def process_update(update: dict):
 
 @app.route(SECRET_PATH, methods=["POST"])
 def webhook():
-    """Telegram webhook endpoint."""
+    """Telegram webhook endpoint — process synchronously for session consistency."""
     try:
         update = request.get_json(force=True)
         if not update:
             return jsonify({"ok": False, "error": "empty body"}), 400
-        thread = threading.Thread(target=process_update, args=(update,))
-        thread.daemon = True
-        thread.start()
+        process_update(update)
         return jsonify({"ok": True}), 200
     except Exception as e:
         print(f"[Webhook] Error: {e}")

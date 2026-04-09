@@ -1,122 +1,133 @@
 """
-Movie data layer — uses Perplexity AI to fetch real, structured movie data.
-Falls back to Apify if configured. Perplexity has real-time web knowledge
-and can return accurate movie details as JSON.
+Movie data layer.
+- Perplexity: generates curated lists of movie TITLES only (recommendation engine)
+- Apify (OMDb + IMDB scraper): fetches real structured data for each title
 """
 import json
 import re
 from perplexity_client import ask_perplexity
+from apify_client_helper import fetch_movies_by_titles, fetch_movie_details
 
-SYSTEM_PROMPT = (
-    "You are a movie database assistant. When asked for movies, always respond with ONLY valid JSON — "
-    "an array of movie objects. No prose, no markdown, no explanation. Just raw JSON array. "
-    "Each object must have: title, year, rating (IMDB 0-10), genres (comma-separated string), "
-    "language, description (1-2 sentences), movie_id (imdb tt-code if known, else slugified title)."
+SYSTEM_TITLES = (
+    "You are a movie recommendation assistant. "
+    "When asked for movie recommendations, respond with ONLY a JSON array of movie title strings. "
+    "No prose, no markdown, no explanation. Just a raw JSON array like: "
+    '[\"Movie Title 1\", \"Movie Title 2\", \"Movie Title 3\"]'
 )
 
-def _extract_json(text: str) -> list:
-    """Extract JSON array from Perplexity response, robust to markdown wrapping."""
+def _extract_titles(text: str) -> list:
+    """Extract a list of title strings from Perplexity response."""
     text = text.strip()
     text = re.sub(r"^```(?:json)?", "", text, flags=re.MULTILINE).strip()
     text = re.sub(r"```$", "", text, flags=re.MULTILINE).strip()
     try:
         data = json.loads(text)
         if isinstance(data, list):
-            return data
-        if isinstance(data, dict) and "movies" in data:
-            return data["movies"]
+            return [str(t).strip() for t in data if t and str(t).strip()]
     except Exception:
-        match = re.search(r'\[.*\]', text, re.DOTALL)
+        # Try to extract array
+        match = re.search(r'\[.*?\]', text, re.DOTALL)
         if match:
             try:
-                return json.loads(match.group())
+                data = json.loads(match.group())
+                if isinstance(data, list):
+                    return [str(t).strip() for t in data if t and str(t).strip()]
             except Exception:
                 pass
+        # Fallback: numbered list
+        titles = re.findall(r'\d+\.\s+([^\n]+)', text)
+        if titles:
+            return [t.strip().strip('"').strip("'") for t in titles]
     return []
 
-def _normalize_movie(item: dict, idx: int) -> dict:
-    """Ensure all expected fields are present."""
-    title = item.get("title") or item.get("name") or f"Movie {idx+1}"
-    movie_id = item.get("movie_id") or item.get("imdb_id") or item.get("id") or re.sub(r'\W+', '_', title.lower())
-    genres = item.get("genres") or item.get("genre") or ""
-    if isinstance(genres, list):
-        genres = ", ".join(genres)
-    return {
-        "movie_id": str(movie_id),
-        "title": title,
-        "year": str(item.get("year") or item.get("release_year") or ""),
-        "rating": str(item.get("rating") or item.get("imdb_rating") or ""),
-        "genres": genres,
-        "language": item.get("language") or "English",
-        "description": item.get("description") or item.get("plot") or item.get("overview") or "",
-        "poster": item.get("poster") or item.get("poster_url") or "",
-        "trailer": item.get("trailer") or item.get("trailer_url") or "",
-    }
+def _get_titles_from_perplexity(prompt: str, limit: int) -> list:
+    raw = ask_perplexity(prompt, system=SYSTEM_TITLES, model="sonar")
+    titles = _extract_titles(raw)
+    return titles[:limit]
 
-def search_movies_perplexity(query: str, limit: int = 8) -> list:
+def search_movies_by_query(query: str, limit: int = 8) -> list:
+    """Use Perplexity to get title recommendations, then OMDb for real data."""
     prompt = (
-        f"List {limit} real movies matching: '{query}'. "
-        f"Return JSON array only. Each: title, year, rating (IMDB float), genres (comma string), "
-        f"language, description (1 sentence), movie_id (IMDB tt-code or slug)."
+        f"List exactly {limit} real movie titles that match: '{query}'. "
+        f"Return only a JSON array of title strings."
     )
-    raw = ask_perplexity(prompt, system=SYSTEM_PROMPT, model="sonar")
-    items = _extract_json(raw)
-    return [_normalize_movie(m, i) for i, m in enumerate(items[:limit]) if m.get("title")]
+    titles = _get_titles_from_perplexity(prompt, limit)
+    if not titles:
+        return []
+    return fetch_movies_by_titles(titles)
 
-def get_trending_perplexity(limit: int = 8) -> list:
+def get_trending_movies(limit: int = 8) -> list:
+    """Get trending/popular movies via Perplexity titles + OMDb data."""
     prompt = (
-        f"List {limit} trending/popular movies from 2023-2025 with high IMDB ratings. "
-        f"Return JSON array only. Each: title, year, rating, genres, language, description, movie_id."
+        f"List {limit} currently trending and highly rated movies from 2023-2025. "
+        f"Return only a JSON array of title strings."
     )
-    raw = ask_perplexity(prompt, system=SYSTEM_PROMPT, model="sonar")
-    items = _extract_json(raw)
-    return [_normalize_movie(m, i) for i, m in enumerate(items[:limit]) if m.get("title")]
+    titles = _get_titles_from_perplexity(prompt, limit)
+    if not titles:
+        titles = ["Oppenheimer", "Dune Part Two", "Poor Things", "The Zone of Interest",
+                  "Killers of the Flower Moon", "Past Lives", "Anatomy of a Fall", "May December"]
+    return fetch_movies_by_titles(titles)
 
-def get_surprise_perplexity(limit: int = 8) -> list:
+def get_surprise_movies(limit: int = 8) -> list:
+    """Get diverse underrated movies via Perplexity + OMDb."""
     prompt = (
-        f"List {limit} underrated or hidden gem movies — critically acclaimed but not mainstream blockbusters. "
-        f"Mix of genres and eras. Return JSON array only. Each: title, year, rating, genres, language, description, movie_id."
+        f"List {limit} underrated, critically acclaimed, or hidden gem movies across different genres and eras. "
+        f"Mix of international and Hollywood. Return only a JSON array of title strings."
     )
-    raw = ask_perplexity(prompt, system=SYSTEM_PROMPT, model="sonar")
-    items = _extract_json(raw)
-    return [_normalize_movie(m, i) for i, m in enumerate(items[:limit]) if m.get("title")]
+    titles = _get_titles_from_perplexity(prompt, limit)
+    if not titles:
+        titles = ["A Ghost Story", "Coherence", "The Invitation", "Timecrimes",
+                  "Paprika", "A Separation", "Capernaum", "Wild Tales"]
+    return fetch_movies_by_titles(titles)
 
-def lookup_movie_perplexity(title: str, limit: int = 5) -> list:
+def lookup_movie_and_similar(title: str, limit: int = 5) -> list:
+    """Look up a specific movie via OMDb, then get similar via Perplexity."""
+    # First get the actual movie
+    movies = fetch_movie_details(title)
+    if not movies:
+        return []
+
+    found_title = movies[0].get("title", title)
+
+    # Get similar movies via Perplexity
+    similar_count = limit - len(movies)
+    if similar_count > 0:
+        prompt = (
+            f"List {similar_count} movies similar to '{found_title}' in genre, tone, or style. "
+            f"Do NOT include '{found_title}'. Return only a JSON array of title strings."
+        )
+        similar_titles = _get_titles_from_perplexity(prompt, similar_count)
+        similar = fetch_movies_by_titles(similar_titles)
+        movies.extend(similar)
+
+    return movies[:limit]
+
+def get_similar_movies(seed_title: str, limit: int = 8) -> list:
+    """Get movies similar to a seed title."""
     prompt = (
-        f"Find the movie '{title}' and {limit-1} similar movies. "
-        f"Start with the exact match. Return JSON array only. "
-        f"Each: title, year, rating, genres, language, description, movie_id (IMDB tt-code if known)."
+        f"List {limit} movies similar to '{seed_title}' — same genre, tone, and emotional feel. "
+        f"Do NOT include '{seed_title}' itself. Return only a JSON array of title strings."
     )
-    raw = ask_perplexity(prompt, system=SYSTEM_PROMPT, model="sonar")
-    items = _extract_json(raw)
-    return [_normalize_movie(m, i) for i, m in enumerate(items[:limit]) if m.get("title")]
+    titles = _get_titles_from_perplexity(prompt, limit)
+    return fetch_movies_by_titles(titles)
 
-def get_similar_movies_perplexity(seed_title: str, limit: int = 8) -> list:
-    prompt = (
-        f"List {limit} movies similar to '{seed_title}' — same genre, tone, and style. "
-        f"Do NOT include '{seed_title}' itself. Return JSON array only. "
-        f"Each: title, year, rating, genres, language, description, movie_id."
-    )
-    raw = ask_perplexity(prompt, system=SYSTEM_PROMPT, model="sonar")
-    items = _extract_json(raw)
-    return [_normalize_movie(m, i) for i, m in enumerate(items[:limit]) if m.get("title")]
-
-def build_preference_query(session: dict, user: dict) -> str:
-    parts = []
+def get_question_engine_recs(session: dict, user: dict, limit: int = 5) -> list:
+    """Generate personalized recommendations based on session answers."""
     mood = session.get("answers_mood", "")
     genre = session.get("answers_genre", "")
     language = session.get("answers_language", "")
     era = session.get("answers_era", "")
     context = session.get("answers_context", "")
     avoid = session.get("answers_avoid", "")
-    pref_genre = user.get("preferred_genres", "") if user else ""
+    pref_genre = (user or {}).get("preferred_genres", "")
 
+    parts = []
     if genre:
-        parts.append(f"{genre} movies")
+        parts.append(f"{genre} genre")
     elif pref_genre:
-        parts.append(f"{pref_genre} movies")
+        parts.append(pref_genre)
     if mood:
-        parts.append(f"with {mood} feel")
+        parts.append(f"{mood} mood")
     if language and language.lower() not in ("any", ""):
         parts.append(f"in {language}")
     if era and era.lower() not in ("any", ""):
@@ -125,14 +136,14 @@ def build_preference_query(session: dict, user: dict) -> str:
         parts.append(f"good for {context}")
     if avoid and avoid.lower() not in ("none", "nothing", ""):
         parts.append(f"without {avoid}")
-    return " ".join(parts) if parts else "highly rated popular movies"
 
-def get_question_engine_recs(session: dict, user: dict, limit: int = 5) -> list:
-    query = build_preference_query(session, user)
+    query = " ".join(parts) if parts else "highly rated popular movies"
+
     prompt = (
-        f"Recommend {limit} movies for someone who wants: '{query}'. "
-        f"Return JSON array only. Each: title, year, rating, genres, language, description, movie_id."
+        f"Recommend {limit} real movies for someone who wants: '{query}'. "
+        f"Return only a JSON array of title strings."
     )
-    raw = ask_perplexity(prompt, system=SYSTEM_PROMPT, model="sonar")
-    items = _extract_json(raw)
-    return [_normalize_movie(m, i) for i, m in enumerate(items[:limit]) if m.get("title")]
+    titles = _get_titles_from_perplexity(prompt, limit)
+    if not titles:
+        return []
+    return fetch_movies_by_titles(titles)

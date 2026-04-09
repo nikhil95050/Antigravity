@@ -1,11 +1,12 @@
 import json
 from airtable_client import get_trailer_cache, set_trailer_cache
+from apify_client_helper import get_trailer_url
 from movie_data import (
-    search_movies_perplexity,
-    get_trending_perplexity,
-    get_surprise_perplexity,
-    lookup_movie_perplexity,
-    get_similar_movies_perplexity,
+    search_movies_by_query,
+    get_trending_movies,
+    get_surprise_movies,
+    lookup_movie_and_similar,
+    get_similar_movies,
     get_question_engine_recs,
 )
 
@@ -28,40 +29,41 @@ def get_next_question(question_index: int):
 
 
 def _dedup_and_exclude(movies: list, session: dict) -> list:
-    """Remove duplicates and movies already seen in last_recs_json."""
+    """Remove duplicates and movies from last_recs_json."""
     last_recs_raw = session.get("last_recs_json") or "[]"
     try:
         last_recs = json.loads(last_recs_raw) if isinstance(last_recs_raw, str) else last_recs_raw
-        exclude_ids = {m.get("movie_id", "") for m in last_recs}
+        exclude_ids = {str(m.get("movie_id", "")) for m in last_recs}
     except Exception:
         exclude_ids = set()
 
     seen = set()
     result = []
     for m in movies:
-        mid = m.get("movie_id", "")
-        if mid not in exclude_ids and mid not in seen and m.get("title"):
+        mid = str(m.get("movie_id", ""))
+        if mid and mid not in exclude_ids and mid not in seen and m.get("title"):
             seen.add(mid)
             result.append(m)
     return result
 
 
 def _enrich_trailers(movies: list) -> list:
-    """Add YouTube search URL as trailer fallback if not provided."""
+    """Add trailer URL to each movie via cache or YouTube search link."""
     enriched = []
     for movie in movies:
-        movie_id = movie.get("movie_id", "")
+        movie_id = str(movie.get("movie_id", ""))
         trailer = movie.get("trailer", "")
-        if not trailer and movie_id:
-            cached = get_trailer_cache(movie_id)
-            if cached:
-                trailer = cached
-            else:
+        if not trailer:
+            if movie_id:
+                cached = get_trailer_cache(movie_id)
+                if cached:
+                    trailer = cached
+            if not trailer:
                 title = movie.get("title", "")
                 year = movie.get("year", "")
-                query = f"{title} {year} official trailer".strip().replace(" ", "+")
-                trailer = f"https://www.youtube.com/results?search_query={query}"
-                set_trailer_cache(movie_id, trailer)
+                trailer = get_trailer_url(title, year)
+                if movie_id and trailer:
+                    set_trailer_cache(movie_id, trailer)
         movie["trailer"] = trailer
         enriched.append(movie)
     return enriched
@@ -69,18 +71,19 @@ def _enrich_trailers(movies: list) -> list:
 
 def run_recommendation(session: dict, user: dict, mode: str = "question_engine",
                         seed_title: str = None, sim_depth: int = 0) -> list:
-    """Core recommendation entry point — calls appropriate data source."""
+    """Core recommendation dispatcher."""
     if mode == "similarity" and sim_depth >= 2:
+        print("[Engine] Sim depth limit reached, falling back to question_engine")
         mode = "question_engine"
 
     print(f"[Engine] Mode={mode} seed={seed_title}")
 
     if mode == "trending":
-        movies = get_trending_perplexity(limit=8)
+        movies = get_trending_movies(limit=8)
     elif mode == "surprise":
-        movies = get_surprise_perplexity(limit=8)
+        movies = get_surprise_movies(limit=8)
     elif mode == "similarity" and seed_title:
-        movies = get_similar_movies_perplexity(seed_title, limit=8)
+        movies = get_similar_movies(seed_title, limit=8)
     else:
         movies = get_question_engine_recs(session, user, limit=8)
 
@@ -90,7 +93,7 @@ def run_recommendation(session: dict, user: dict, mode: str = "question_engine",
 
 
 def lookup_movie(title: str) -> list:
-    """Lookup a specific movie by title and return it + similar movies."""
-    movies = lookup_movie_perplexity(title, limit=5)
+    """Lookup a specific movie + similar by title."""
+    movies = lookup_movie_and_similar(title, limit=5)
     movies = _enrich_trailers(movies)
     return movies
