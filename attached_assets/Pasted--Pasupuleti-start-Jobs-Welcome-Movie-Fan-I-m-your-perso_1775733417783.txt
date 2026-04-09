@@ -1,0 +1,118 @@
+> Pasupuleti:
+/start
+
+> Jobs:
+👋 Welcome, Movie Fan!
+
+I'm your personal movie recommendation assistant. Let me ask you a few quick questions to find the perfect films for you.
+
+Question 1/6: What's your mood right now? (e.g. happy, sad, excited, relaxed, thrilled)
+
+> Pasupuleti:
+Happy
+
+> Jobs:
+🤔 I'm not sure what you mean by 'Happy'.
+
+Here's what you can do:
+• /start — Get personalized recommendations
+• /movie [title] — Search a specific film
+• trending — See what's popular
+• surprise — Random picks
+• /help — Full command list
+
+> Pasupuleti:
+/start
+
+> Jobs:
+👋 Welcome, Movie Fan!
+
+I'm your personal movie recommendation assistant. Let me ask you a few quick questions to find the perfect films for you.
+
+Question 1/6: What's your mood right now? (e.g. happy, sad, excited, relaxed, thrilled)
+
+> Pasupuleti:
+happy
+
+> Jobs:
+🤔 I'm not sure what you mean by 'happy'.
+
+Here's what you can do:
+• /start — Get personalized recommendations
+• /movie [title] — Search a specific film
+• trending — See what's popular
+• surprise — Random picks
+• /help — Full command list
+
+> Pasupuleti:
+/help
+
+> Jobs:
+🎬 Movie Bot Commands
+
+/start — Start a new recommendation session
+/reset — Reset your session
+/movie [title] — Search for a specific movie
+/history — View your recommendation history
+
+Quick commands:
+• trending — See trending movies
+• surprise — Get a surprise recommendation
+
+Inline buttons on movies:
+✅ Watched — Mark as watched
+❤️ Like — Save preference
+👎 Dislike — Note dislike
+💾 Save — Add to watchlist
+🎬 More Like — Find similar movies
+
+> Pasupuleti:
+/reset
+
+> Jobs:
+🔄 Session reset! Send /start to begin fresh, or type a command like trending or surprise.
+
+> Pasupuleti:
+/history
+
+> Jobs:
+Your history is empty. Start by getting recommendations!
+
+> Pasupuleti:
+/movie
+
+> Jobs:
+Please provide a movie title. Example: /movie Interstellar
+
+> Pasupuleti:
+/movie Baahubali
+
+> Jobs:
+🔍 Looking up Baahubali and finding similar movies...
+
+> Jobs:
+❌ Couldn't find Baahubali. Please check the title and try again.
+
+> Pasupuleti:
+/movie Interstellar
+
+> Jobs:
+🔍 Looking up Interstellar and finding similar movies...
+
+> Jobs:
+❌ Couldn't find Interstellar. Please check the title and try again.
+
+> Pasupuleti:
+Trending
+
+> Jobs:
+📈 Fetching trending movies...
+
+> Jobs:
+Sorry, I couldn't find any movies matching your preferences. Try /reset to start over.
+
+> Pasupuleti:
+Surprise
+
+> Jobs:
+🎲 Picking a surprise selection for you...

@@ -4,7 +4,7 @@ import threading
 from flask import Flask, request, jsonify
 
 from telegram_helpers import set_webhook, answer_callback_query
-from airtable_client import get_session, upsert_session, get_user
+from airtable_client import get_session, upsert_session, get_user, now_iso
 from intent_handler import (
     normalize_input, detect_intent,
     handle_start, handle_reset, handle_help, handle_movie,
@@ -39,7 +39,7 @@ def process_update(update: dict):
         session = get_session(chat_id) or {}
         user = get_user(chat_id)
 
-        upsert_session(chat_id, {"last_active": __import__('airtable_client').now_iso()})
+        upsert_session(chat_id, {"last_active": now_iso()})
 
         intent = detect_intent(input_text, session)
         print(f"[Bot] chat_id={chat_id} intent={intent} text='{input_text[:60]}'")
