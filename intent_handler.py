@@ -1,369 +1,398 @@
 import json
+import concurrent.futures
 from datetime import datetime
 
-from airtable_client import (
-    get_session, upsert_session, reset_session, get_user, upsert_user,
-    get_history, insert_history_rows, update_history_watched,
-    get_movie_from_history, save_to_watchlist, now_iso,
-)
-from recommendation_engine import (
-    get_next_question, run_recommendation, lookup_movie, QUESTIONS, QUESTION_KEYS
-)
-from telegram_helpers import (
-    send_message, send_photo, build_movie_buttons, format_movie_list, format_history_list
-)
-from perplexity_client import generate_explanation
+from services.session_service import SessionService
+from services.user_service import UserService
+from services.movie_service import MovieService
+from services.recommendation_service import RecommendationService
+from repositories.feedback_repository import FeedbackRepository
+from repositories.api_usage_repository import ApiUsageRepository
+from repositories.admin_repository import AdminRepository
 
+# Initialize services
+session_service = SessionService()
+user_service = UserService()
+movie_service = MovieService()
+rec_service = RecommendationService()
+feedback_repo = FeedbackRepository()
+usage_repo = ApiUsageRepository()
+admin_repo = AdminRepository()
+
+from recommendation_engine import QUESTIONS, QUESTION_KEYS
+from telegram_helpers import (
+    send_message, edit_message, send_photo, build_movie_buttons, build_question_keyboard, build_iteration_buttons,
+    format_history_list, format_watchlist_list,
+)
+from app_config import is_feature_enabled
 
 def normalize_input(update: dict) -> dict:
-    """Extract chat_id, username, input_text, action_type from Telegram update."""
-    result = {
-        "chat_id": None,
-        "username": "",
-        "input_text": "",
-        "action_type": "message",
-        "callback_query_id": None,
-    }
+    result = {"chat_id": None, "username": "", "input_text": "", "action_type": "unknown", "callback_query_id": None}
     if "message" in update:
-        msg = update["message"]
-        result["chat_id"] = msg.get("chat", {}).get("id")
-        result["username"] = msg.get("from", {}).get("username", "")
-        result["input_text"] = msg.get("text", "").strip()
-        result["action_type"] = "message"
+        msg = update["message"]; chat = msg.get("chat", {})
+        result["chat_id"] = chat.get("id"); result["username"] = msg.get("from", {}).get("username", "")
+        result["input_text"] = msg.get("text", "").strip(); result["action_type"] = "message"
     elif "callback_query" in update:
-        cq = update["callback_query"]
-        result["chat_id"] = cq.get("message", {}).get("chat", {}).get("id")
-        result["username"] = cq.get("from", {}).get("username", "")
-        result["input_text"] = cq.get("data", "").strip()
-        result["action_type"] = "callback"
+        cq = update["callback_query"]; msg = cq.get("message", {}); chat = msg.get("chat", {})
+        result["chat_id"] = chat.get("id"); result["username"] = cq.get("from", {}).get("username", "")
+        result["input_text"] = cq.get("data", "").strip(); result["action_type"] = "callback"
         result["callback_query_id"] = cq.get("id")
     return result
 
-
 def detect_intent(input_text: str, session: dict) -> str:
-    """Detect intent from input text and session state."""
     text = input_text.lower().strip()
-
-    if text.startswith("/start"):
-        return "start"
-    if text.startswith("/reset"):
-        return "reset"
-    if text.startswith("/help"):
-        return "help"
-    if text.startswith("/movie "):
-        return "movie"
-    if text == "/movie":
-        return "movie_prompt"
-    if text.startswith("/history"):
-        return "history"
-    if text.startswith("watched_"):
-        return "watched"
-    if text.startswith("like_"):
-        return "like"
-    if text.startswith("dislike_"):
-        return "dislike"
-    if text.startswith("save_"):
-        return "save"
-    if text.startswith("more_like_"):
-        return "more_like"
-    if text in ("trending", "/trending"):
-        return "trending"
-    if text in ("surprise", "/surprise"):
-        return "surprise"
-
-    session_state = (session or {}).get("session_state", "idle")
-    if session_state == "questioning":
-        return "questioning"
-
+    if text.startswith("/start"): return "start"
+    if text.startswith("/reset"): return "reset"
+    if text.startswith("/help"): return "help"
+    if text.startswith("/movie "): return "movie"
+    if text == "/movie": return "movie_prompt"
+    if text.startswith("/history"): return "history"
+    if text.startswith("/watchlist"): return "watchlist"
+    if text.startswith("watched_"): return "watched"
+    if text.startswith("like_"): return "like"
+    if text.startswith("dislike_"): return "dislike"
+    if text.startswith("save_"): return "save"
+    if text.startswith("more_like_"): return "more_like"
+    if text in ("trending", "/trending"): return "trending"
+    if text in ("surprise", "/surprise"): return "surprise"
+    if text == "q_more_recs": return "questioning_more"
+    if text == "q_reset": return "reset"
+    if text.startswith("q_"): return "questioning"
+    if (session or {}).get("session_state") == "questioning": return "questioning"
+    if text.startswith("/admin_"): return text[1:] 
     return "fallback"
 
+def _check_admin(chat_id) -> bool:
+    if not admin_repo.is_admin(chat_id):
+        send_message(chat_id, "🔒 <b>Access Denied</b>\nThis command is reserved for authorized administrators.")
+        return False
+    return True
 
-def _save_movies_to_history(chat_id, movies: list):
-    """Batch insert movies into history."""
-    rows = [
-        {
-            "chat_id": str(chat_id),
-            "movie_id": m.get("movie_id", ""),
-            "title": m.get("title", ""),
-            "year": str(m.get("year", "")),
-            "genres": m.get("genres", ""),
-            "language": m.get("language", ""),
-            "rating": str(m.get("rating", "")),
-            "watched": False,
-        }
-        for m in movies if m.get("movie_id")
-    ]
-    if rows:
-        insert_history_rows(rows)
+def _build_movie_caption(movie: dict, index: int, total: int) -> str:
+    title = movie.get("title", "Movie")
+    year = str(movie.get("year", "") or "")
+    rating = str(movie.get("rating", "") or "")
+    genres = movie.get("genres", "") or ""
+    desc = movie.get("description", "") or ""
+    trailer = movie.get("trailer", "") or ""
+    streaming = movie.get("streaming", "") or ""
 
+    header = f"<b>Pick {index} of {total}: {title}</b>"
+    lines = [header, f"<b>{title}</b>{f' ({year})' if year else ''}"]
+    if rating:
+        lines.append(f"Rating: <b>{rating}</b>")
+    if genres:
+        lines.append(f"Genres: {genres}")
+    if streaming:
+        lines.append(f"📺 Watch on: <b>{streaming}</b>")
+    if desc:
+        lines.append(desc[:420] + ("..." if len(desc) > 420 else ""))
+    if trailer: lines.append(f'<a href="{trailer}">Watch trailer</a>')
+    lines.append("<i>The buttons below apply to this movie only.</i>")
+    return "\n\n".join(lines)
 
-def _save_last_recs(chat_id, movies: list):
-    """Persist last recommendations in session for dedup."""
-    last_recs = json.dumps([
-        {"movie_id": m.get("movie_id", ""), "title": m.get("title", "")}
-        for m in movies
-    ])
-    upsert_session(chat_id, {"last_recs_json": last_recs})
-
-
-def send_movies(chat_id, movies: list, intro: str = ""):
-    """Send movie recommendations with photo (if available) and buttons."""
+def send_movies(chat_id: str, movies: list, intro: str = "", include_more: bool = False):
     if not movies:
-        send_message(chat_id,
-            "Sorry, I couldn't find any movies right now. Try again or use /reset to start fresh.")
+        send_message(chat_id, "I couldn't pull together a strong set of movie picks just yet. Please try again in a moment.")
+        return
+    if intro:
+        send_message(chat_id, intro + "\n\n<i>Each recommendation arrives as its own card, and the buttons belong to the card right above them.</i>")
+    
+    total = len(movies)
+    
+    def _send_single(idx_movie):
+        index, movie = idx_movie
+        caption = _build_movie_caption(movie, index, total)
+        markup = build_movie_buttons(movie, chat_id)
+        poster = movie.get("poster") or ""
+        if poster: send_photo(chat_id, poster, caption[:1020], markup)
+        else: send_message(chat_id, caption, markup)
+
+    # Dispatch cards in parallel for visual speed
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        executor.map(_send_single, enumerate(movies, start=1))
+    
+    if include_more:
+        send_message(chat_id, "Not seeing a match? Or want to keep looking?", build_iteration_buttons())
+
+def _send_current_question(chat_id, session):
+    idx = int((session or {}).get("question_index", 0))
+    if idx >= len(QUESTIONS):
+        _finalize(chat_id, session, first_run=True)
         return
 
-    text = ""
-    if intro:
-        text = f"{intro}\n\n"
-    text += format_movie_list(movies)
-    text += "\n\n<i>Use the buttons below to interact with each movie:</i>"
+    q_key, q_text, q_opts = QUESTIONS[idx]
+    show_skip = True
+    show_done = (q_key == "genre")
+    
+    selected = []
+    if q_key == "genre":
+        selected = [s.strip() for s in session.get("answers_genre", "").split(",") if s.strip()]
 
-    markup = build_movie_buttons(movies, chat_id)
-    first_poster = next((m.get("poster") for m in movies if m.get("poster")), None)
-
-    if first_poster:
-        send_photo(chat_id, first_poster, text[:1020], markup)
+    markup = build_question_keyboard(q_key, q_opts, selected=selected, show_skip=show_skip, show_done=show_done)
+    progress = f"<b>Question {idx+1}/{len(QUESTIONS)}</b>\n\n"
+    full_text = progress + q_text
+    
+    last_msg_id = session.get("last_question_msg_id")
+    if last_msg_id:
+        res = edit_message(chat_id, last_msg_id, full_text, markup)
+        if not res or not res.get("ok"):
+            res = send_message(chat_id, full_text, markup)
     else:
-        for chunk_start in range(0, len(text), 4000):
-            chunk = text[chunk_start:chunk_start + 4000]
-            if chunk_start == 0:
-                send_message(chat_id, chunk, markup)
-            else:
-                send_message(chat_id, chunk)
-
+        res = send_message(chat_id, full_text, markup)
+    
+    if res and res.get("ok"):
+        new_msg_id = res.get("result", {}).get("message_id")
+        session_service.upsert_session(chat_id, {"last_question_msg_id": new_msg_id})
 
 def handle_start(chat_id, username, session, user):
-    reset_session(chat_id)
-    upsert_user(chat_id, username)
-    q_key, q_text = QUESTIONS[0]
-    upsert_session(chat_id, {
-        "session_state": "questioning",
-        "question_index": 0,
-        "pending_question": q_key,
-        "last_active": now_iso(),
-    })
-    is_returning = bool(user and user.get("username"))
-    welcome = (
-        f"👋 Welcome{'  back' if is_returning else ''}, <b>{username or 'Movie Fan'}</b>!\n\n"
-        "I'm your personal movie recommendation assistant. Let me ask you a few quick questions "
-        "to find the perfect films for you.\n\n"
-        f"<b>Question 1/{len(QUESTIONS)}:</b> {q_text}"
-    )
+    session_service.reset_session(chat_id)
+    user_service.upsert_user(chat_id, username)
+    new_session = {"session_state": "questioning", "question_index": 0}
+    session_service.upsert_session(chat_id, new_session)
+    
+    index = abs(hash(username or "user")) % 3
+    greeting = ["Welcome back", "Great to see you again", "Glad you're back"][index] if user else "Welcome to your personal cinema guide"
+    welcome = f"<b>{greeting}, {username or 'Movie Fan'}.</b>\n\nI'm here to find movies that match your exact mood.\n\nLet's get started with a few quick questions."
     send_message(chat_id, welcome)
+    _send_current_question(chat_id, new_session)
 
+def handle_questioning(chat_id, input_text, session, user):
+    idx = int((session or {}).get("question_index", 0))
+    if idx >= len(QUESTIONS):
+         _finalize(chat_id, session, first_run=False)
+         return
+    
+    current_key = QUESTIONS[idx][0]
+    
+    if input_text.startswith("q_"):
+        if input_text == "q_more_recs": return handle_questioning_more(chat_id, session)
+        if input_text == "q_reset": return handle_reset(chat_id, user.get("username", ""))
+
+        if input_text.startswith("q_skip_") or input_text.startswith("q_done_"):
+             target_key = input_text.split("_")[-1]
+             if target_key != current_key: return 
+        elif input_text.startswith(f"q_{current_key}_"):
+             pass 
+        else:
+             return
+
+    ans = input_text
+    if input_text.startswith("q_skip_"):
+        ans = "[Skipped]"
+        _move_next(chat_id, session, idx, current_key, ans)
+        return
+    
+    if input_text.startswith("q_done_"):
+        _move_next(chat_id, session, idx, current_key, session.get(f"answers_{current_key}", ""))
+        return
+
+    if input_text.startswith(f"q_{current_key}_"):
+        choice = input_text.replace(f"q_{current_key}_", "", 1)
+        if current_key == "genre":
+            current_ans = session.get("answers_genre", "")
+            selected = [s.strip() for s in current_ans.split(",") if s.strip()]
+            if choice in selected: selected.remove(choice)
+            else: selected.append(choice)
+            new_ans = ",".join(selected)
+            session_service.upsert_session(chat_id, {"answers_genre": new_ans})
+            session["answers_genre"] = new_ans 
+            _send_current_question(chat_id, session)
+            return
+        else:
+            ans = choice
+            _move_next(chat_id, session, idx, current_key, ans)
+            return
+
+    _move_next(chat_id, session, idx, current_key, ans)
+
+def handle_questioning_more(chat_id, session):
+    _finalize(chat_id, session, first_run=False)
+
+def _move_next(chat_id, session, current_idx, key, value):
+    next_idx = current_idx + 1
+    session_service.upsert_session(chat_id, {f"answers_{key}": value, "question_index": next_idx})
+    new_session = session_service.get_session(chat_id)
+    if next_idx < len(QUESTIONS):
+        _send_current_question(chat_id, new_session)
+    else:
+        session_service.upsert_session(chat_id, {"session_state": "idle"})
+        _finalize(chat_id, new_session, first_run=True)
+
+def _finalize(chat_id, session, first_run=True):
+    try:
+        if first_run:
+            send_message(chat_id, "✨ <b>Profile complete!</b>\n\nI know exactly what you like now. Fetching personalized recommendations...\n🎬 <b>Finding your perfect movies...</b>")
+        
+        full_session = session_service.get_session(chat_id)
+        user = user_service.get_user(chat_id)
+        
+        # Usage Tracking (InBackground)
+        usage_repo.log_usage("Perplexity", "generate_recommendations", str(chat_id))
+        
+        movies = rec_service.get_recommendations(full_session, user, mode="question_engine")
+        
+        if not movies:
+            send_message(chat_id, "I've run out of recommendations that fit your current profile perfectly! Try <code>/start</code> fresh?")
+            return
+
+        seen_raw = full_session.get("last_recs_json") or "[]"
+        try: seen = json.loads(seen_raw)
+        except: seen = []
+        
+        new_seen = [{"movie_id": m.get("movie_id"), "title": m.get("title")} for m in movies]
+        all_seen = seen + new_seen
+        session_service.upsert_session(chat_id, {"last_recs_json": json.dumps(all_seen)})
+        
+        # Enforce history enrichment by ensuring full metadata is passed
+        movie_service.add_to_history(chat_id, movies)
+        
+        intro = "<b>Your personalized recommendations are ready.</b>" if first_run else "<b>Here are 5 more suggestions for you:</b>"
+        send_movies(chat_id, movies, intro, include_more=True)
+    except Exception as e:
+        print(f"[Finalize] Critical Error: {e}")
+        from airtable_client import log_error
+        log_error(chat_id, "intent_handler._finalize", "question_engine", "finalize_crash", str(e))
+        send_message(chat_id, "Oops! I ran into a small technical glitch while curating your picks. Please try tapping 'Next Suggestions' again or send /start to retry.")
 
 def handle_reset(chat_id, username):
-    reset_session(chat_id)
-    send_message(chat_id,
-        "🔄 Session reset! Send /start to begin fresh, or type <code>trending</code> or <code>surprise</code>.")
-
-
-def handle_help(chat_id):
-    help_text = (
-        "<b>🎬 Movie Bot Commands</b>\n\n"
-        "/start — Start a new recommendation session\n"
-        "/reset — Reset your session\n"
-        "/movie [title] — Search for a specific movie\n"
-        "/history — View your recommendation history\n\n"
-        "<b>Quick commands:</b>\n"
-        "• <code>trending</code> — See trending movies\n"
-        "• <code>surprise</code> — Get a surprise recommendation\n\n"
-        "<b>Inline buttons on movies:</b>\n"
-        "✅ Watched — Mark as watched\n"
-        "❤️ Like — Save preference (improves future recs)\n"
-        "👎 Dislike — Note dislike\n"
-        "💾 Save — Add to watchlist\n"
-        "🎬 More Like — Find similar movies"
-    )
-    send_message(chat_id, help_text)
-
+    session_service.reset_session(chat_id)
+    send_message(chat_id, "Fresh slate. Send <code>/start</code> for a new guided session.")
 
 def handle_movie(chat_id, input_text, session, user):
     parts = input_text.strip().split(None, 1)
     if len(parts) < 2:
-        send_message(chat_id,
-            "Please provide a movie title. Example: <code>/movie Interstellar</code>")
+        send_message(chat_id, "I need a title first. Try <code>/movie Inception</code>.")
         return
     title = parts[1].strip()
-    send_message(chat_id, f"🔍 Looking up <b>{title}</b> and finding similar movies...")
-    movies = lookup_movie(title)
+    
+    # Usage Tracking
+    usage_repo.log_usage("Apify/OMDb", "lookup_movie", str(chat_id))
+    
+    send_message(chat_id, f"Analyzing <b>{title}</b> and curating similar vibes for you...")
+    movies = rec_service.lookup_movie_context(title)
     if not movies:
-        send_message(chat_id,
-            f"❌ Couldn't find <b>{title}</b>. Please check the title and try again.")
+        send_message(chat_id, f"I couldn't track down <b>{title}</b>.")
         return
-
-    _save_movies_to_history(chat_id, movies)
-    _save_last_recs(chat_id, movies)
-    send_movies(chat_id, movies, f"🎬 Here's what I found for <b>{title}</b>:")
-
+    movie_service.add_to_history(chat_id, movies)
+    
+    seen_raw = session.get("last_recs_json") or "[]"
+    try: seen = json.loads(seen_raw)
+    except: seen = []
+    all_seen = seen + [{"movie_id": m.get("movie_id"), "title": m.get("title")} for m in movies]
+    session_service.upsert_session(chat_id, {"last_recs_json": json.dumps(all_seen)})
+    send_movies(chat_id, movies, f"<b>Based on {title}, here are some top-tier picks.</b>")
 
 def handle_history(chat_id):
-    history = get_history(chat_id, limit=20)
-    text = format_history_list(history)
-    send_message(chat_id, text)
+    history = movie_service.get_history(chat_id)
+    send_message(chat_id, format_history_list(history))
 
+def handle_watchlist(chat_id):
+    wl = movie_service.get_watchlist(chat_id)
+    send_message(chat_id, format_watchlist_list(wl))
 
 def handle_watched(chat_id, callback_data):
     movie_id = callback_data.replace("watched_", "", 1)
-    update_history_watched(chat_id, movie_id, watched=True)
-    send_message(chat_id, "✅ Marked as watched! Great choice.")
-
-
-def handle_like(chat_id, callback_data, user):
-    movie_id = callback_data.replace("like_", "", 1)
-    movie = get_movie_from_history(chat_id, movie_id)
-    if movie:
-        genres = movie.get("genres", "")
-        current = (user or {}).get("preferred_genres", "")
-        new_genres = set(g.strip() for g in current.split(",") if g.strip())
-        new_genres.update(g.strip() for g in genres.split(",") if g.strip())
-        upsert_user(chat_id, "", {"preferred_genres": ", ".join(new_genres)})
-        send_message(chat_id,
-            f"❤️ Got it! I'll recommend more movies like <b>{movie.get('title', 'this')}</b>.")
-    else:
-        send_message(chat_id, "❤️ Preference saved!")
-
-
-def handle_dislike(chat_id, callback_data, user):
-    movie_id = callback_data.replace("dislike_", "", 1)
-    movie = get_movie_from_history(chat_id, movie_id)
-    if movie:
-        genres = movie.get("genres", "")
-        current = (user or {}).get("disliked_genres", "")
-        new_genres = set(g.strip() for g in current.split(",") if g.strip())
-        new_genres.update(g.strip() for g in genres.split(",") if g.strip())
-        upsert_user(chat_id, "", {"disliked_genres": ", ".join(new_genres)})
-        send_message(chat_id,
-            f"👎 Noted! I'll avoid movies like <b>{movie.get('title', 'this')}</b>.")
-    else:
-        send_message(chat_id, "👎 Preference noted!")
-
+    movie_service.mark_as_watched(chat_id, movie_id)
+    send_message(chat_id, "Marked as watched. Nice one.")
 
 def handle_save(chat_id, callback_data, user):
     movie_id = callback_data.replace("save_", "", 1)
-    movie = get_movie_from_history(chat_id, movie_id)
+    history = movie_service.get_history(chat_id)
+    movie = next((m for m in history if str(m.get("movie_id")) == str(movie_id)), None)
     if movie:
-        added = save_to_watchlist(chat_id, movie)
-        if added:
-            send_message(chat_id,
-                f"💾 <b>{movie.get('title', 'Movie')}</b> added to your watchlist!")
-        else:
-            send_message(chat_id,
-                f"<b>{movie.get('title', 'Movie')}</b> is already in your watchlist.")
+        movie_service.add_to_watchlist(chat_id, movie)
+        send_message(chat_id, f"Saved <b>{movie.get('title')}</b> to your watchlist.")
     else:
-        send_message(chat_id,
-            "❌ Could not find that movie. It may not be in your history yet.")
-
+        send_message(chat_id, "Saved to your watchlist.")
 
 def handle_more_like(chat_id, callback_data, session, user):
     movie_id = callback_data.replace("more_like_", "", 1)
-    movie = get_movie_from_history(chat_id, movie_id)
-    seed_title = movie.get("title", "") if movie else ""
-    if not seed_title:
-        send_message(chat_id, "❌ Could not find that movie in your history.")
-        return
-
-    sim_depth = int((session or {}).get("sim_depth", 0) or 0)
-    if sim_depth >= 2:
-        send_message(chat_id,
-            "🔄 Similarity depth limit reached. Switching to general recommendations...")
-        movies = run_recommendation(session, user, mode="question_engine")
-        upsert_session(chat_id, {"sim_depth": 0})
-    else:
-        send_message(chat_id, f"🔍 Finding movies similar to <b>{seed_title}</b>...")
-        movies = run_recommendation(session, user, mode="similarity",
-                                    seed_title=seed_title, sim_depth=sim_depth)
-        upsert_session(chat_id, {"sim_depth": sim_depth + 1})
-
-    _save_movies_to_history(chat_id, movies)
-    _save_last_recs(chat_id, movies)
-    send_movies(chat_id, movies, f"🎬 Movies similar to <b>{seed_title}</b>:")
-
+    
+    # Usage Tracking
+    usage_repo.log_usage("Perplexity", "similarity_recs", str(chat_id))
+    
+    send_message(chat_id, "Building a tighter set of recommendations...")
+    movies = rec_service.get_recommendations(session, user, mode="similarity", seed_title=movie_id)
+    movie_service.add_to_history(chat_id, movies)
+    send_movies(chat_id, movies, "More like that...")
 
 def handle_trending(chat_id, session, user):
-    send_message(chat_id, "📈 Fetching trending movies...")
-    movies = run_recommendation(session, user, mode="trending")
-    _save_movies_to_history(chat_id, movies)
-    _save_last_recs(chat_id, movies)
-    send_movies(chat_id, movies, "📈 <b>Trending Movies Right Now:</b>")
-
+    # Usage Tracking
+    usage_repo.log_usage("Perplexity", "trending_list", str(chat_id))
+    
+    send_message(chat_id, "Scanning the crowd-pleasers...")
+    movies = rec_service.get_recommendations(session, user, mode="trending")
+    movie_service.add_to_history(chat_id, movies)
+    send_movies(chat_id, movies, "<b>Trending right now</b>")
 
 def handle_surprise(chat_id, session, user):
-    send_message(chat_id, "🎲 Picking a surprise selection for you...")
-    movies = run_recommendation(session, user, mode="surprise")
-    _save_movies_to_history(chat_id, movies)
-    _save_last_recs(chat_id, movies)
-    send_movies(chat_id, movies, "🎲 <b>Surprise Recommendations:</b>")
-
-
-def handle_questioning(chat_id, input_text, session, user):
-    """Handle user answers during the question flow."""
-    session = session or {}
-    question_index = int(session.get("question_index", 0) or 0)
-
-    if question_index >= len(QUESTIONS):
-        _finalize_questions(chat_id, session, user)
-        return
-
-    current_key = QUESTIONS[question_index][0]
-    field_key = f"answers_{current_key}"
-    answer = input_text.strip()
-
-    next_index = question_index + 1
-    patch = {
-        field_key: answer,
-        "question_index": next_index,
-        "last_active": now_iso(),
-    }
-
-    if next_index < len(QUESTIONS):
-        next_key, next_text = QUESTIONS[next_index]
-        patch["pending_question"] = next_key
-        patch["session_state"] = "questioning"
-        upsert_session(chat_id, patch)
-        send_message(
-            chat_id,
-            f"<b>Question {next_index + 1}/{len(QUESTIONS)}:</b> {next_text}"
-        )
-    else:
-        patch["session_state"] = "idle"
-        patch["pending_question"] = ""
-        upsert_session(chat_id, patch)
-        updated_session = {**session, **patch}
-        _finalize_questions(chat_id, updated_session, user)
-
-
-def _finalize_questions(chat_id, session, user):
-    send_message(chat_id, "🎬 Perfect! Finding the best movies for you...")
-    movies = run_recommendation(session, user, mode="question_engine")
-    _save_movies_to_history(chat_id, movies)
-    _save_last_recs(chat_id, movies)
-
-    mood = session.get("answers_mood", "")
-    genre = session.get("answers_genre", "")
-    context_val = session.get("answers_context", "")
-    ctx_desc = f"wants {genre or 'good'} movies with {mood or 'a great'} vibe, watching {context_val or 'for themselves'}"
-
-    try:
-        explanation = generate_explanation(movies, ctx_desc) if movies else ""
-    except Exception:
-        explanation = ""
-
-    intro = "🎬 <b>Your Personalized Recommendations:</b>"
-    if explanation:
-        intro += f"\n\n<i>{explanation}</i>"
-    send_movies(chat_id, movies, intro)
-
+    # Usage Tracking
+    usage_repo.log_usage("Perplexity", "surprise_list", str(chat_id))
+    
+    send_message(chat_id, "Finding some wildcards...")
+    movies = rec_service.get_recommendations(session, user, mode="surprise")
+    movie_service.add_to_history(chat_id, movies)
+    send_movies(chat_id, movies, "<b>Surprise picks worth a look</b>")
 
 def handle_fallback(chat_id, input_text):
-    text = (
-        f"🤔 I'm not sure what you mean by <i>'{input_text[:50]}'</i>.\n\n"
-        "Here's what you can do:\n"
-        "• /start — Get personalized recommendations\n"
-        "• /movie [title] — Search a specific film\n"
-        "• <code>trending</code> — See what's popular\n"
-        "• <code>surprise</code> — Random picks\n"
-        "• /help — Full command list"
-    )
-    send_message(chat_id, text)
+    send_message(chat_id, "I'm not sure about that. Try <code>/start</code> or <code>/help</code>.")
+
+def handle_admin_health(chat_id):
+    if not _check_admin(chat_id): return
+    send_message(chat_id, "Health status active.") 
+
+def handle_admin_stats(chat_id):
+    if not _check_admin(chat_id): return
+    admin_repo.cleanup_old_logs(days=7)
+    stats = admin_repo.get_stats()
+    lines = ["<b>Bot Performance Metrics</b>"]
+    for k, v in stats.items():
+        lines.append(f"- {k.replace('_', ' ').title()}: <b>{v}</b>")
+    send_message(chat_id, "\n".join(lines))
+
+def handle_like(chat_id, callback_data, user):
+    movie_id = callback_data.replace("like_", "", 1)
+    feedback_repo.log_reaction(chat_id, movie_id, "like")
+    send_message(chat_id, "Locked in. I'll steer future picks closer to this vibe.")
+
+def handle_dislike(chat_id, callback_data, user):
+    movie_id = callback_data.replace("dislike_", "", 1)
+    feedback_repo.log_reaction(chat_id, movie_id, "dislike")
+    send_message(chat_id, "Noted. I'll avoid recommendations like that.")
+
+def handle_admin_errors(chat_id):
+    if not _check_admin(chat_id): return
+    admin_repo.log_admin_action(chat_id, "admin_errors")
+    from airtable_client import get_recent_errors
+    errors = get_recent_errors(limit=5)
+    if not errors:
+        send_message(chat_id, "No errors reported in the last 24h.")
+        return
+    lines = ["<b>Recent System Errors</b>"]
+    for e in errors:
+        lines.append(f"⚠️ {e['intent']}.{e['workflow_step']}: {e['error_message'][:100]}")
+    send_message(chat_id, "\n".join(lines))
+
+def handle_admin_clear_cache(chat_id):
+    if not _check_admin(chat_id): return
+    admin_repo.log_admin_action(chat_id, "admin_clear_cache")
+    from redis_cache import clear_local_cache
+    clear_local_cache()
+    send_message(chat_id, "Hot caches cleared successfully.")
+
+def handle_admin_disable_provider(chat_id, provider_name):
+    if not _check_admin(chat_id): return
+    admin_repo.log_admin_action(chat_id, "admin_disable_provider", provider_name)
+    from app_config import set_feature_flag
+    set_feature_flag(provider_name, False)
+    admin_repo.update_provider_health(provider_name, False, 10, datetime.utcnow().isoformat())
+    send_message(chat_id, f"Provider <b>{provider_name}</b> has been manually disabled.")
+
+def handle_admin_enable_provider(chat_id, provider_name):
+    if not _check_admin(chat_id): return
+    admin_repo.log_admin_action(chat_id, "admin_enable_provider", provider_name)
+    from app_config import set_feature_flag
+    set_feature_flag(provider_name, True)
+    admin_repo.update_provider_health(provider_name, True, 0, None)
+    send_message(chat_id, f"Provider <b>{provider_name}</b> has been manually enabled.")

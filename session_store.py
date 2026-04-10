@@ -60,3 +60,11 @@ def mem_set_user(chat_id, username, patch: dict = None):
             existing.update(patch)
         existing["updated_at"] = now_iso()
         _users[cid] = existing
+
+def mem_session_count():
+    with _lock:
+        return len(_sessions)
+
+def mem_user_count():
+    with _lock:
+        return len(_users)

@@ -1,10 +1,32 @@
 import os
 import requests
+from airtable_client import log_error
+from app_config import is_feature_enabled
 
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 
+def _should_retry(status_code: int) -> bool:
+    return status_code in (429, 500, 502, 503, 504)
+
+def _extract_content(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(msg, dict):
+        return ""
+    content = msg.get("content")
+    return content.strip() if isinstance(content, str) else ""
+
 def ask_perplexity(prompt: str, system: str = "", model: str = "sonar") -> str:
     """Send a prompt to Perplexity and return the response text."""
+    if not is_feature_enabled("perplexity"):
+        return ""
+    if not PERPLEXITY_API_KEY:
+        log_error("", "perplexity.ask_perplexity", "", "missing_api_key", "PERPLEXITY_API_KEY missing", raw_payload={"model": model})
+        return ""
     try:
         headers = {
             "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
@@ -15,20 +37,61 @@ def ask_perplexity(prompt: str, system: str = "", model: str = "sonar") -> str:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        resp = requests.post(
-            "https://api.perplexity.ai/chat/completions",
-            headers=headers,
-            json={"model": model, "messages": messages},
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
-        else:
-            print(f"[Perplexity] Error {resp.status_code}: {resp.text[:200]}")
-            return ""
+        last_error = None
+        for attempt in ("first", "retry"):
+            try:
+                resp = requests.post(
+                    "https://api.perplexity.ai/chat/completions",
+                    headers=headers,
+                    json={"model": model, "messages": messages},
+                    timeout=20,
+                )
+
+                status = resp.status_code
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = None
+
+                if status == 200 and isinstance(data, dict):
+                    content = _extract_content(data)
+                    if content:
+                        return content
+                    last_error = {"status_code": status, "error": "missing_content", "json": data}
+                else:
+                    last_error = {"status_code": status, "text": resp.text[:500], "json": data if isinstance(data, dict) else None}
+
+                if attempt == "first" and _should_retry(status):
+                    continue
+
+                log_error(
+                    "",
+                    "perplexity.ask_perplexity",
+                    "",
+                    "perplexity_api_failed",
+                    f"Perplexity failed with status {status}",
+                    raw_payload={"model": model, "prompt": prompt[:800], "system": system[:800], "response": last_error},
+                    retry_status="retried" if attempt == "retry" else "not_retried",
+                    resolution_status="open",
+                )
+                return ""
+            except Exception as e:
+                if attempt == "first":
+                    continue
+                log_error(
+                    "",
+                    "perplexity.ask_perplexity",
+                    "",
+                    "perplexity_request_exception",
+                    str(e),
+                    raw_payload={"model": model, "prompt": prompt[:800], "system": system[:800]},
+                    retry_status="retried",
+                    resolution_status="open",
+                )
+                return ""
+        return ""
     except Exception as e:
-        print(f"[Perplexity] ask_perplexity error: {e}")
+        log_error("", "perplexity.ask_perplexity", "", "unhandled_exception", str(e), raw_payload={"model": model})
         return ""
 
 def understand_user_answer(question: str, answer: str) -> str:

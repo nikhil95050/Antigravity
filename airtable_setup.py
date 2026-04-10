@@ -1,64 +1,75 @@
 """
-Airtable Setup Script
-Run this once to verify/document the required Airtable table structure.
-Tables must be created manually in Airtable with the following fields.
+Airtable setup helpers for the current runtime schema.
 """
 
 REQUIRED_TABLES = {
-    "sessions": [
-        ("chat_id", "Single line text"),
-        ("session_state", "Single line text"),
-        ("question_index", "Number"),
-        ("pending_question", "Single line text"),
-        ("answers_mood", "Single line text"),
-        ("answers_genre", "Single line text"),
-        ("answers_language", "Single line text"),
-        ("answers_era", "Single line text"),
-        ("answers_context", "Single line text"),
-        ("answers_avoid", "Single line text"),
-        ("last_recs_json", "Long text"),
-        ("sim_depth", "Number"),
-        ("last_active", "Single line text"),
-        ("updated_at", "Single line text"),
+    "Sessions": [
+        ("Chat ID", "Number"),
+        ("Session State", "Single line text"),
+        ("Question Index", "Number"),
+        ("Pending Question", "Single line text"),
+        ("Answers Mood", "Single line text"),
+        ("Answers Genre", "Single line text"),
+        ("Answers Language", "Single line text"),
+        ("Answers Era", "Single line text"),
+        ("Answers Context", "Single line text"),
+        ("Answers Avoid", "Single line text"),
+        ("Last Recs JSON", "Long text"),
+        ("Sim Depth", "Number"),
+        ("Last Active", "Date/time"),
+        ("Updated At", "Date/time"),
     ],
-    "users": [
-        ("chat_id", "Single line text"),
-        ("username", "Single line text"),
-        ("preferred_genres", "Single line text"),
-        ("disliked_genres", "Single line text"),
-        ("preferred_language", "Single line text"),
-        ("preferred_era", "Single line text"),
-        ("watch_context", "Single line text"),
-        ("avg_rating_preference", "Single line text"),
-        ("updated_at", "Single line text"),
+    "Users": [
+        ("Chat ID", "Number"),
+        ("Username", "Single line text"),
+        ("Preferred Genres", "Long text"),
+        ("Disliked Genres", "Long text"),
+        ("Preferred Language", "Single line text"),
+        ("Preferred Era", "Single line text"),
+        ("Watch Context", "Single line text"),
+        ("Avg Rating Preference", "Number"),
+        ("Updated At", "Date/time"),
     ],
-    "history": [
-        ("chat_id", "Single line text"),
-        ("movie_id", "Single line text"),
-        ("title", "Single line text"),
-        ("year", "Single line text"),
-        ("genres", "Single line text"),
-        ("language", "Single line text"),
-        ("rating", "Single line text"),
-        ("recommended_at", "Single line text"),
-        ("watched", "Checkbox"),
-        ("watched_at", "Single line text"),
+    "History": [
+        ("Title", "Single line text"),
+        ("Chat ID", "Number"),
+        ("Movie ID", "Single line text"),
+        ("Year", "Single line text"),
+        ("Genres", "Long text"),
+        ("Language", "Single line text"),
+        ("Rating", "Single line text"),
+        ("Recommended At", "Date/time"),
+        ("Watched", "Checkbox"),
+        ("Watched At", "Date/time"),
     ],
-    "watchlist": [
-        ("chat_id", "Single line text"),
-        ("movie_id", "Single line text"),
-        ("title", "Single line text"),
-        ("year", "Single line text"),
-        ("language", "Single line text"),
-        ("rating", "Single line text"),
-        ("genres", "Single line text"),
+    "Watchlist": [
+        ("Title", "Single line text"),
+        ("Chat ID", "Number"),
+        ("Movie ID", "Single line text"),
+        ("Year", "Single line text"),
+        ("Language", "Single line text"),
+        ("Rating", "Single line text"),
+        ("Genres", "Long text"),
+        ("Added At", "Date/time"),
     ],
-    "trailer_cache": [
-        ("movie_id", "Single line text"),
-        ("trailer_url", "Single line text"),
-        ("cached_at", "Single line text"),
+    "Trailer Cache": [
+        ("Movie ID", "Single line text"),
+        ("Trailer URL", "URL"),
+        ("Cached At", "Date/time"),
+    ],
+    "Error Logs": [
+        ("Timestamp", "Date/time"),
+        ("Chat ID", "Number"),
+        ("Workflow Step", "Single line text"),
+        ("Intent", "Single line text"),
+        ("Error Type", "Single line text"),
+        ("Error Message", "Long text"),
+        ("Raw Payload", "Long text"),
+        ("Retry Status", "Single line text"),
+        ("Resolution Status", "Single line text"),
     ],
 }
+
 
 def print_setup_guide():
     print("=" * 60)
@@ -66,23 +77,26 @@ def print_setup_guide():
     print("=" * 60)
     print("\nCreate the following tables in your Airtable base:\n")
     for table, fields in REQUIRED_TABLES.items():
-        print(f"\n📋 Table: {table}")
+        print(f"\nTable: {table}")
         for field_name, field_type in fields:
-            print(f"   • {field_name} ({field_type})")
+            print(f"  - {field_name} ({field_type})")
     print("\n" + "=" * 60)
 
+
 def verify_tables():
-    """Try to access each required table."""
+    """Try to access each required table using the runtime table names."""
     from airtable_client import get_table
+
     results = {}
     for table_name in REQUIRED_TABLES:
         try:
             t = get_table(table_name)
             t.all(max_records=1)
-            results[table_name] = "✅ OK"
+            results[table_name] = "OK"
         except Exception as e:
-            results[table_name] = f"❌ Error: {e}"
+            results[table_name] = f"Error: {e}"
     return results
+
 
 if __name__ == "__main__":
     print_setup_guide()

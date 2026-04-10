@@ -1,0 +1,19 @@
+[Bot] Starting on port 5000
+[Bot] Webhook path: /webhook/8026179275:AAFlSRM8bhCul55vkgTtuV3FVSkUpCTObf4
+ * Serving Flask app 'main'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://172.31.95.66:5000
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [09/Apr/2026 11:39:32] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [09/Apr/2026 11:40:16] "POST /webhook/8026179275:AAFlSRM8bhCul55vkgTtuV3FVSkUpCTObf4 HTTP/1.1" 200 -
+[Airtable] ✅ Connected successfully
+[Bot] chat_id=1878846631 intent=start text='/start'
+127.0.0.1 - - [09/Apr/2026 11:40:21] "POST /webhook/8026179275:AAFlSRM8bhCul55vkgTtuV3FVSkUpCTObf4 HTTP/1.1" 200 -
+[Bot] chat_id=1878846631 intent=fallback text='Happy and excited'
+127.0.0.1 - - [09/Apr/2026 11:40:29] "GET /health HTTP/1.1" 200 -
+127.0.0.1 - - [09/Apr/2026 11:40:32] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [09/Apr/2026 11:40:35] "GET /airtable-status HTTP/1.1" 200 -
+127.0.0.1 - - [09/Apr/2026 11:40:37] "GET / HTTP/1.1" 200 -

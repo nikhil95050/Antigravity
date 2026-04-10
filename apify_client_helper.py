@@ -8,6 +8,8 @@ Uses:
 import os
 import requests
 import json
+import concurrent.futures
+from app_config import is_feature_enabled
 
 APIFY_API_TOKEN = os.environ.get("APIFY_API_TOKEN", "")
 OMDB_API_KEY = "trilogy"  # free public demo key
@@ -97,14 +99,42 @@ def _normalize_omdb(data: dict) -> dict:
         "genres": genres,
         "language": language.split(",")[0].strip(),
         "description": plot,
+        "director": data.get("Director", ""),
+        "actors": data.get("Actors", ""),
         "poster": poster,
         "trailer": "",
     }
+
+
+def _enrich_missing_fields(movie: dict) -> dict:
+    """Try to fill missing poster/description/rating fields from OMDb."""
+    if not movie:
+        return {}
+    if movie.get("poster") and movie.get("description") and movie.get("rating"):
+        return movie
+
+    enriched = {}
+    imdb_id = movie.get("movie_id", "")
+    title = movie.get("title", "")
+    if imdb_id.startswith("tt"):
+        enriched = omdb_get_by_imdb_id(imdb_id)
+    if not enriched and title:
+        enriched = omdb_get_by_title(title)
+    if not enriched:
+        return movie
+
+    merged = dict(movie)
+    for key, value in enriched.items():
+        if value and not merged.get(key):
+            merged[key] = value
+    return merged
 
 # ─── Apify IMDB scraper ────────────────────────────────────────────────────────
 
 def apify_run_actor(actor_id: str, input_data: dict, timeout: int = 90) -> list:
     """Run an Apify actor synchronously and return dataset items."""
+    if not is_feature_enabled("apify"):
+        return []
     try:
         headers = {"Authorization": f"Bearer {APIFY_API_TOKEN}"}
         url = f"{APIFY_BASE}/acts/{actor_id}/run-sync-get-dataset-items"
@@ -169,39 +199,54 @@ def apify_get_imdb_movie(query: str) -> list:
 
 # ─── High-level movie fetch functions ─────────────────────────────────────────
 
+def _fetch_single_movie_full(title: str) -> dict:
+    """Helper for parallel fetching: try OMDb then Apify."""
+    try:
+        movie = omdb_get_by_title(title)
+        if movie and movie.get("title"):
+            return _enrich_missing_fields(movie)
+        
+        # Fallback: try Apify IMDB scraper
+        apify_results = apify_get_imdb_movie(title)
+        if apify_results:
+            return _enrich_missing_fields(apify_results[0])
+    except Exception as e:
+        print(f"[Fetch] Error for {title}: {e}")
+    return {}
+
 def fetch_movies_by_titles(titles: list) -> list:
     """
     Given a list of movie titles (from Perplexity), fetch real data for each 
-    from OMDb. Returns normalized movie list.
+    in parallel. Returns normalized movie list.
     """
+    if not titles:
+        return []
+        
+    unique_titles = list(dict.fromkeys(titles)) # Preserve order but unique
     movies = []
-    seen = set()
-    for title in titles:
-        if title in seen:
-            continue
-        seen.add(title)
-        movie = omdb_get_by_title(title)
-        if movie and movie.get("title"):
-            movies.append(movie)
-        else:
-            # Fallback: try Apify IMDB scraper
-            apify_results = apify_get_imdb_movie(title)
-            if apify_results:
-                movies.append(apify_results[0])
+    
+    # Use 8 workers to balance speed and resource usage
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_title = {executor.submit(_fetch_single_movie_full, t): t for t in unique_titles}
+        for future in concurrent.futures.as_completed(future_to_title):
+            res = future.result()
+            if res and res.get("title"):
+                movies.append(res)
+    
     return movies
 
 def fetch_movie_details(title: str) -> list:
     """Get a specific movie + similar info from OMDb, then Apify fallback."""
     result = omdb_get_by_title(title)
     if result and result.get("title"):
-        return [result]
+        return [_enrich_missing_fields(result)]
     # Try search
     results = omdb_search(title, limit=3)
     if results:
-        return results
+        return [_enrich_missing_fields(movie) for movie in results]
     # Try Apify
     apify_results = apify_get_imdb_movie(title)
-    return apify_results[:3]
+    return [_enrich_missing_fields(movie) for movie in apify_results[:3]]
 
 def get_trailer_url(title: str, year: str = "") -> str:
     """Build a YouTube search URL for the trailer."""

@@ -1,12 +1,8 @@
 """
-Auto-create all required Airtable tables for the Movie Bot.
-Requires your Airtable token to have: schema.bases:write and data.records:write scopes.
-
-Run once: python create_airtable_tables.py
+Auto-create Airtable tables that match the current runtime schema.
 """
 import os
 import sys
-import json
 import requests
 
 AIRTABLE_API_KEY = os.environ.get("AIRTABLE_API_KEY", "")
@@ -19,78 +15,93 @@ HEADERS = {
 
 TABLES = [
     {
-        "name": "sessions",
+        "name": "Sessions",
         "fields": [
-            {"name": "chat_id", "type": "singleLineText"},
-            {"name": "session_state", "type": "singleLineText"},
-            {"name": "question_index", "type": "number", "options": {"precision": 0}},
-            {"name": "pending_question", "type": "singleLineText"},
-            {"name": "answers_mood", "type": "singleLineText"},
-            {"name": "answers_genre", "type": "singleLineText"},
-            {"name": "answers_language", "type": "singleLineText"},
-            {"name": "answers_era", "type": "singleLineText"},
-            {"name": "answers_context", "type": "singleLineText"},
-            {"name": "answers_avoid", "type": "singleLineText"},
-            {"name": "last_recs_json", "type": "multilineText"},
-            {"name": "sim_depth", "type": "number", "options": {"precision": 0}},
-            {"name": "last_active", "type": "singleLineText"},
-            {"name": "updated_at", "type": "singleLineText"},
+            {"name": "Chat ID", "type": "number", "options": {"precision": 0}},
+            {"name": "Session State", "type": "singleLineText"},
+            {"name": "Question Index", "type": "number", "options": {"precision": 0}},
+            {"name": "Pending Question", "type": "singleLineText"},
+            {"name": "Answers Mood", "type": "singleLineText"},
+            {"name": "Answers Genre", "type": "singleLineText"},
+            {"name": "Answers Language", "type": "singleLineText"},
+            {"name": "Answers Era", "type": "singleLineText"},
+            {"name": "Answers Context", "type": "singleLineText"},
+            {"name": "Answers Avoid", "type": "singleLineText"},
+            {"name": "Last Recs JSON", "type": "multilineText"},
+            {"name": "Sim Depth", "type": "number", "options": {"precision": 0}},
+            {"name": "Last Active", "type": "dateTime", "options": {"timeZone": "utc", "dateFormat": {"name": "iso"}, "timeFormat": {"name": "24hour"}}},
+            {"name": "Updated At", "type": "dateTime", "options": {"timeZone": "utc", "dateFormat": {"name": "iso"}, "timeFormat": {"name": "24hour"}}},
         ],
     },
     {
-        "name": "users",
+        "name": "Users",
         "fields": [
-            {"name": "chat_id", "type": "singleLineText"},
-            {"name": "username", "type": "singleLineText"},
-            {"name": "preferred_genres", "type": "singleLineText"},
-            {"name": "disliked_genres", "type": "singleLineText"},
-            {"name": "preferred_language", "type": "singleLineText"},
-            {"name": "preferred_era", "type": "singleLineText"},
-            {"name": "watch_context", "type": "singleLineText"},
-            {"name": "avg_rating_preference", "type": "singleLineText"},
-            {"name": "updated_at", "type": "singleLineText"},
+            {"name": "Chat ID", "type": "number", "options": {"precision": 0}},
+            {"name": "Username", "type": "singleLineText"},
+            {"name": "Preferred Genres", "type": "multilineText"},
+            {"name": "Disliked Genres", "type": "multilineText"},
+            {"name": "Preferred Language", "type": "singleLineText"},
+            {"name": "Preferred Era", "type": "singleLineText"},
+            {"name": "Watch Context", "type": "singleLineText"},
+            {"name": "Avg Rating Preference", "type": "number", "options": {"precision": 1}},
+            {"name": "Updated At", "type": "dateTime", "options": {"timeZone": "utc", "dateFormat": {"name": "iso"}, "timeFormat": {"name": "24hour"}}},
         ],
     },
     {
-        "name": "history",
+        "name": "History",
         "fields": [
-            {"name": "chat_id", "type": "singleLineText"},
-            {"name": "movie_id", "type": "singleLineText"},
-            {"name": "title", "type": "singleLineText"},
-            {"name": "year", "type": "singleLineText"},
-            {"name": "genres", "type": "singleLineText"},
-            {"name": "language", "type": "singleLineText"},
-            {"name": "rating", "type": "singleLineText"},
-            {"name": "recommended_at", "type": "singleLineText"},
-            {"name": "watched", "type": "checkbox", "options": {"icon": "check", "color": "greenBright"}},
-            {"name": "watched_at", "type": "singleLineText"},
+            {"name": "Title", "type": "singleLineText"},
+            {"name": "Chat ID", "type": "number", "options": {"precision": 0}},
+            {"name": "Movie ID", "type": "singleLineText"},
+            {"name": "Year", "type": "singleLineText"},
+            {"name": "Genres", "type": "multilineText"},
+            {"name": "Language", "type": "singleLineText"},
+            {"name": "Rating", "type": "singleLineText"},
+            {"name": "Recommended At", "type": "dateTime", "options": {"timeZone": "utc", "dateFormat": {"name": "iso"}, "timeFormat": {"name": "24hour"}}},
+            {"name": "Watched", "type": "checkbox", "options": {"icon": "check", "color": "greenBright"}},
+            {"name": "Watched At", "type": "dateTime", "options": {"timeZone": "utc", "dateFormat": {"name": "iso"}, "timeFormat": {"name": "24hour"}}},
         ],
     },
     {
-        "name": "watchlist",
+        "name": "Watchlist",
         "fields": [
-            {"name": "chat_id", "type": "singleLineText"},
-            {"name": "movie_id", "type": "singleLineText"},
-            {"name": "title", "type": "singleLineText"},
-            {"name": "year", "type": "singleLineText"},
-            {"name": "language", "type": "singleLineText"},
-            {"name": "rating", "type": "singleLineText"},
-            {"name": "genres", "type": "singleLineText"},
+            {"name": "Title", "type": "singleLineText"},
+            {"name": "Chat ID", "type": "number", "options": {"precision": 0}},
+            {"name": "Movie ID", "type": "singleLineText"},
+            {"name": "Year", "type": "singleLineText"},
+            {"name": "Language", "type": "singleLineText"},
+            {"name": "Rating", "type": "singleLineText"},
+            {"name": "Genres", "type": "multilineText"},
+            {"name": "Added At", "type": "dateTime", "options": {"timeZone": "utc", "dateFormat": {"name": "iso"}, "timeFormat": {"name": "24hour"}}},
         ],
     },
     {
-        "name": "trailer_cache",
+        "name": "Trailer Cache",
         "fields": [
-            {"name": "movie_id", "type": "singleLineText"},
-            {"name": "trailer_url", "type": "singleLineText"},
-            {"name": "cached_at", "type": "singleLineText"},
+            {"name": "Movie ID", "type": "singleLineText"},
+            {"name": "Trailer URL", "type": "url"},
+            {"name": "Cached At", "type": "dateTime", "options": {"timeZone": "utc", "dateFormat": {"name": "iso"}, "timeFormat": {"name": "24hour"}}},
+        ],
+    },
+    {
+        "name": "Error Logs",
+        "fields": [
+            {"name": "Timestamp", "type": "dateTime", "options": {"timeZone": "utc", "dateFormat": {"name": "iso"}, "timeFormat": {"name": "24hour"}}},
+            {"name": "Chat ID", "type": "number", "options": {"precision": 0}},
+            {"name": "Workflow Step", "type": "singleLineText"},
+            {"name": "Intent", "type": "singleLineText"},
+            {"name": "Error Type", "type": "singleLineText"},
+            {"name": "Error Message", "type": "multilineText"},
+            {"name": "Raw Payload", "type": "multilineText"},
+            {"name": "Retry Status", "type": "singleLineText"},
+            {"name": "Resolution Status", "type": "singleLineText"},
         ],
     },
 ]
 
 
 def get_existing_tables():
-    resp = requests.get(META_URL, headers=HEADERS)
+    resp = requests.get(META_URL, headers=HEADERS, timeout=20)
     if resp.status_code == 200:
         return {t["name"] for t in resp.json().get("tables", [])}
     return None
@@ -98,14 +109,17 @@ def get_existing_tables():
 
 def create_table(table_def: dict) -> bool:
     name = table_def["name"]
-    resp = requests.post(META_URL, headers=HEADERS, json=table_def)
+    resp = requests.post(META_URL, headers=HEADERS, json=table_def, timeout=30)
     if resp.status_code in (200, 201):
-        print(f"  ✅ Created table: {name}")
+        print(f"Created table: {name}")
         return True
-    else:
+    try:
         err = resp.json()
-        print(f"  ❌ Failed to create '{name}': {err.get('error', {}).get('message', resp.text[:200])}")
-        return False
+        message = err.get("error", {}).get("message", resp.text[:200])
+    except Exception:
+        message = resp.text[:200]
+    print(f"Failed to create '{name}': {message}")
+    return False
 
 
 def main():
@@ -114,7 +128,7 @@ def main():
     print("=" * 60)
 
     if not AIRTABLE_API_KEY or not AIRTABLE_BASE_ID:
-        print("❌ Missing AIRTABLE_API_KEY or AIRTABLE_BASE_ID environment variables.")
+        print("Missing AIRTABLE_API_KEY or AIRTABLE_BASE_ID environment variables.")
         sys.exit(1)
 
     print(f"\nBase ID: {AIRTABLE_BASE_ID}")
@@ -122,15 +136,11 @@ def main():
 
     existing = get_existing_tables()
     if existing is None:
-        print(
-            "\n⚠️  Cannot list tables (token may lack 'schema.bases:read' scope).\n"
-            "   Will attempt to create all tables anyway.\n"
-        )
+        print("\nCannot list tables with the current token. Will try to create everything.\n")
         existing = set()
     else:
         print(f"Found existing tables: {existing or '(none)'}")
 
-    print("\nCreating missing tables...")
     created = 0
     skipped = 0
     failed = 0
@@ -138,36 +148,18 @@ def main():
     for table_def in TABLES:
         name = table_def["name"]
         if name in existing:
-            print(f"  ⏭️  Skipping '{name}' (already exists)")
+            print(f"Skipping '{name}' (already exists)")
             skipped += 1
+            continue
+        if create_table(table_def):
+            created += 1
         else:
-            ok = create_table(table_def)
-            if ok:
-                created += 1
-            else:
-                failed += 1
+            failed += 1
 
     print(f"\nDone: {created} created, {skipped} skipped, {failed} failed")
-
     if failed > 0:
-        print(
-            "\n⚠️  Some tables could not be created automatically.\n"
-            "   Your Airtable token needs these scopes:\n"
-            "     • schema.bases:write\n"
-            "     • schema.bases:read\n"
-            "     • data.records:read\n"
-            "     • data.records:write\n\n"
-            "   To fix:\n"
-            "   1. Go to https://airtable.com/create/tokens\n"
-            "   2. Create a new token with all the scopes above\n"
-            "   3. Update the AIRTABLE_API_KEY secret\n"
-            "   4. Run this script again\n\n"
-            "   OR create the tables manually — visit /airtable-status in the app for the schema."
-        )
         sys.exit(1)
-    else:
-        print("\n✅ All tables ready! Your bot is fully operational.")
-        print("   Next: Visit /setup-webhook to register the Telegram webhook if not done.")
+    print("All runtime tables are ready.")
 
 
 if __name__ == "__main__":

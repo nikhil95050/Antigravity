@@ -1,0 +1,18 @@
+[Bot] Starting on port 5000
+[Bot] Webhook path: /webhook/8026179275:AAFlSRM8bhCul55vkgTtuV3FVSkUpCTObf4
+ * Serving Flask app 'main'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://172.31.95.66:5000
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [09/Apr/2026 11:23:08] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [09/Apr/2026 11:23:28] "POST /webhook/8026179275:AAFlSRM8bhCul55vkgTtuV3FVSkUpCTObf4 HTTP/1.1" 200 -
+[Airtable] Unavailable, using in-memory store: ('403 Client Error: Forbidden for url: https://api.airtable.com/v0/appxpqvNIuUvzLpW3/sessions?maxRecords=1', "{'type': 'INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND', 'message': 'Invalid permissions, or the requested model was not found. Check that both your user and your token have the required permissions, and that the model names and/or ids are correct.'}")
+[Bot] chat_id=9999 intent=start text='/start'
+[Bot] chat_id=9999 intent=questioning text='Happy'
+127.0.0.1 - - [09/Apr/2026 11:23:31] "POST /webhook/8026179275:AAFlSRM8bhCul55vkgTtuV3FVSkUpCTObf4 HTTP/1.1" 200 -
+[Setup] Webhook set to: https://71ecffd3-b06c-4c43-99b8-55622c89d70d-00-8zdsflpbw539.sisko.replit.dev/webhook/8026179275:AAFlSRM8bhCul55vkgTtuV3FVSkUpCTObf4
+[Setup] Telegram response: {'ok': True, 'result': True, 'description': 'Webhook is already set'}
+127.0.0.1 - - [09/Apr/2026 11:24:10] "GET /setup-webhook HTTP/1.1" 200 -
