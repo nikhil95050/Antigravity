@@ -14,9 +14,7 @@ class MovieService:
         self.history_repo.log_recommendations(chat_id, movies)
 
     def mark_as_watched(self, chat_id: str, movie_id: str):
-        # We need to maintain both chat_id and movie_id for the upsert logic
-        patch = {"watched": True, "movie_id": movie_id, "chat_id": str(chat_id)}
-        self.history_repo.upsert(chat_id, patch, id_field="chat_id,movie_id")
+        self.history_repo.update_watched(chat_id, movie_id, watched=True)
 
     def get_watchlist(self, chat_id: str, limit: int = 25) -> List[Dict]:
         return self.watchlist_repo.get_watchlist(chat_id, limit)

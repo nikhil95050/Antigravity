@@ -15,25 +15,12 @@ def _should_retry(status_code: int) -> bool:
     return status_code in (429, 500, 502, 503, 504)
 
 
-def _clean_media_url(url: str, validate: bool = True) -> str:
+def _clean_media_url(url: str, validate: bool = False) -> str:
     cleaned = (url or "").strip()
     if not cleaned or not cleaned.startswith(("http://", "https://")):
         return ""
     
-    if not validate:
-        return cleaned
-
-    # Use a very short timeout for validation to prevent hangs
-    try:
-        resp = requests.request("HEAD", cleaned, timeout=3, allow_redirects=True)
-        if resp.status_code == 200:
-            content_type = resp.headers.get("Content-Type", "").lower()
-            if "image" in content_type:
-                return cleaned
-    except Exception:
-        pass
-    
-    return ""
+    return cleaned
 
 
 def _post_telegram(method: str, payload: dict, timeout: int, chat_id=None, step: str = "telegram"):

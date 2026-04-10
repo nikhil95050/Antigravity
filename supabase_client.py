@@ -53,11 +53,19 @@ def _request(method: str, path: str, params=None, json_body=None, prefer: str | 
         return None, str(e)
 
 
+def _format_filter(value):
+    val_str = str(value)
+    ops = ("eq.", "gt.", "gte.", "lt.", "lte.", "neq.", "in.", "is.")
+    if any(val_str.startswith(op) for op in ops):
+        return val_str
+    return f"eq.{value}"
+
+
 def select_rows(table: str, filters: dict | None = None, limit: int | None = None, order: str | None = None):
     params = {}
     if filters:
         for key, value in filters.items():
-            params[key] = f"eq.{value}"
+            params[key] = _format_filter(value)
     if limit:
         params["limit"] = limit
     if order:
@@ -74,12 +82,12 @@ def insert_rows(table: str, rows: list[dict], upsert: bool = False, on_conflict:
 
 
 def update_rows(table: str, patch: dict, filters: dict):
-    params = {key: f"eq.{value}" for key, value in (filters or {}).items()}
+    params = {key: _format_filter(value) for key, value in (filters or {}).items()}
     return _request("PATCH", table, params=params, json_body=patch, prefer="return=representation")
 
 
 def delete_rows(table: str, filters: dict):
-    params = {key: f"eq.{value}" for key, value in (filters or {}).items()}
+    params = {key: _format_filter(value) for key, value in (filters or {}).items()}
     return _request("DELETE", table, params=params, prefer="return=representation")
 
 

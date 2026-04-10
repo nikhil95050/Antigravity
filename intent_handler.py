@@ -338,6 +338,20 @@ def handle_surprise(chat_id, session, user):
 def handle_fallback(chat_id, input_text):
     send_message(chat_id, "I'm not sure about that. Try <code>/start</code> or <code>/help</code>.")
 
+def handle_help(chat_id):
+    help_text = (
+        "🎬 <b>Movie Bot Commands</b>\n\n"
+        "<code>/start</code> - Start a new guided session\n"
+        "<code>/movie [title]</code> - Find similar movies\n"
+        "<code>/history</code> - View your recent recommendations\n"
+        "<code>/watchlist</code> - View your saved movies\n"
+        "<code>/trending</code> - See what's popular right now\n"
+        "<code>/surprise</code> - Get hidden gem recommendations\n"
+        "<code>/reset</code> - Reset your current session\n"
+        "<code>/help</code> - Show this help message"
+    )
+    send_message(chat_id, help_text)
+
 def handle_admin_health(chat_id):
     if not _check_admin(chat_id): return
     send_message(chat_id, "Health status active.") 

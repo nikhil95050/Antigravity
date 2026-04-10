@@ -48,7 +48,7 @@ def lookup_movie_and_similar(title: str, limit: int = 5) -> List[Dict]:
     similar_titles = _get_titles_from_perplexity(prompt, 4)
     similar_movies = fetch_movies_by_titles(similar_titles)
     
-    return [main_movie] + similar_movies
+    return main_movie[:1] + similar_movies
 
 def get_question_engine_recs(session: dict, user: dict, limit: int = 5) -> list:
     """Generate personalized recommendations based on the 8-question session context."""

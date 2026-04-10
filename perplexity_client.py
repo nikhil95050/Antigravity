@@ -1,7 +1,9 @@
 import os
 import requests
+import hashlib
 from airtable_client import log_error
 from app_config import is_feature_enabled
+from redis_cache import get_json, set_json
 
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 
@@ -27,6 +29,12 @@ def ask_perplexity(prompt: str, system: str = "", model: str = "sonar") -> str:
     if not PERPLEXITY_API_KEY:
         log_error("", "perplexity.ask_perplexity", "", "missing_api_key", "PERPLEXITY_API_KEY missing", raw_payload={"model": model})
         return ""
+
+    cache_key = "px_" + hashlib.md5((model + system + prompt).encode()).hexdigest()
+    cached = get_json(cache_key)
+    if cached:
+        return cached
+
     try:
         headers = {
             "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
@@ -55,7 +63,24 @@ def ask_perplexity(prompt: str, system: str = "", model: str = "sonar") -> str:
 
                 if status == 200 and isinstance(data, dict):
                     content = _extract_content(data)
+                    
+                    usage = data.get("usage", {})
+                    prompt_tokens = usage.get("prompt_tokens", 0)
+                    completion_tokens = usage.get("completion_tokens", 0)
+                    total_tokens = usage.get("total_tokens", 0)
+                    
+                    from repositories.api_usage_repository import ApiUsageRepository
+                    ApiUsageRepository().log_usage(
+                        provider="Perplexity",
+                        action="ask_perplexity",
+                        chat_id="system",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens
+                    )
+                    
                     if content:
+                        set_json(cache_key, content, ttl=86400 * 7)
                         return content
                     last_error = {"status_code": status, "error": "missing_content", "json": data}
                 else:

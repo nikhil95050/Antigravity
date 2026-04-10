@@ -71,8 +71,11 @@ class HistoryRepository(BaseRepository):
             "director": record.get("Director", ""),
             "actors": record.get("Actors", ""),
             "poster": record.get("Poster URL", ""),
+            "poster_url": record.get("Poster URL", ""),
             "trailer": record.get("Trailer URL", ""),
+            "trailer_url": record.get("Trailer URL", ""),
             "streaming": record.get("Streaming Info", ""),
+            "streaming_info": record.get("Streaming Info", ""),
             "recommended_at": record.get("Recommended At", ""),
             "watched": bool(record.get("Watched", False)),
             "watched_at": record.get("Watched At", "")
@@ -99,6 +102,27 @@ class HistoryRepository(BaseRepository):
         payloads = [{**movie, "recommended_at": ts} for movie in movies]
         self.bulk_upsert(chat_id, payloads, id_field="chat_id,movie_id")
             
+    def update_watched(self, chat_id: str, movie_id: str, watched: bool = True):
+        watched_at = datetime.utcnow().isoformat() + "Z" if watched else None
+        
+        if is_configured():
+            from supabase_client import update_rows
+            patch = {"watched": watched, "watched_at": watched_at}
+            self._bg(update_rows, self.table_name, patch, {"chat_id": str(chat_id), "movie_id": str(movie_id)})
+
+        from airtable_client import is_airtable_available, get_table
+        if is_airtable_available():
+            def _at_update():
+                try:
+                    table = get_table(self.airtable_name)
+                    records = table.all(formula=f"AND({{Chat ID}}={chat_id},{{Movie ID}}='{movie_id}')")
+                    if records:
+                        patch_at = {"Watched": watched}
+                        if watched_at: patch_at["Watched At"] = watched_at
+                        table.update(records[0]["id"], patch_at)
+                except: pass
+            self._bg(_at_update)
+
     def insert(self, data: Dict[str, Any]):
         """Legacy support or specific inserts."""
         self.upsert(data.get("chat_id"), data, id_field="chat_id,movie_id")

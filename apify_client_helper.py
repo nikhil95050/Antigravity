@@ -9,7 +9,9 @@ import os
 import requests
 import json
 import concurrent.futures
+import hashlib
 from app_config import is_feature_enabled
+from redis_cache import get_json, set_json
 
 APIFY_API_TOKEN = os.environ.get("APIFY_API_TOKEN", "")
 OMDB_API_KEY = "trilogy"  # free public demo key
@@ -20,33 +22,45 @@ APIFY_BASE = "https://api.apify.com/v2"
 
 def omdb_get_by_title(title: str) -> dict:
     """Get a single movie by exact title from OMDb."""
+    if not title:
+        return {}
+        
+    cache_key = "omdb_t_" + hashlib.md5(title.lower().encode()).hexdigest()
+    cached = get_json(cache_key)
+    if cached: return cached
+
     try:
         resp = requests.get(OMDB_BASE, params={
             "t": title, "type": "movie", "plot": "short", "apikey": OMDB_API_KEY
         }, timeout=10)
         data = resp.json()
         if data.get("Response") == "True":
-            return _normalize_omdb(data)
+            res = _normalize_omdb(data)
+            set_json(cache_key, res, ttl=86400 * 30)
+            return res
     except Exception as e:
         print(f"[OMDb] get_by_title error: {e}")
     return {}
 
 def omdb_search(query: str, limit: int = 10) -> list:
     """Search OMDb for movies matching query. Returns list of normalized movies."""
+    cache_key = "omdb_s_" + hashlib.md5(f"{query}_{limit}".encode()).hexdigest()
+    cached = get_json(cache_key)
+    if cached: return cached
+
     try:
         resp = requests.get(OMDB_BASE, params={
             "s": query, "type": "movie", "apikey": OMDB_API_KEY
         }, timeout=10)
         data = resp.json()
         results = data.get("Search", [])
-        movies = []
-        for item in results[:limit]:
-            # Search results only have basic info — fetch full details
+        
+        def _fetch_detail(item):
             detail = omdb_get_by_imdb_id(item.get("imdbID", ""))
             if detail:
-                movies.append(detail)
+                return detail
             elif item.get("Title"):
-                movies.append({
+                return {
                     "movie_id": item.get("imdbID", ""),
                     "title": item.get("Title", ""),
                     "year": item.get("Year", ""),
@@ -56,7 +70,18 @@ def omdb_search(query: str, limit: int = 10) -> list:
                     "description": "",
                     "poster": item.get("Poster", ""),
                     "trailer": "",
-                })
+                }
+            return None
+
+        movies = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(_fetch_detail, item) for item in results[:limit]]
+            for future in futures:
+                res = future.result()
+                if res:
+                    movies.append(res)
+        
+        set_json(cache_key, movies, ttl=86400 * 7)
         return movies
     except Exception as e:
         print(f"[OMDb] search error: {e}")
@@ -66,13 +91,20 @@ def omdb_get_by_imdb_id(imdb_id: str) -> dict:
     """Get full movie details by IMDB ID."""
     if not imdb_id:
         return {}
+        
+    cache_key = "omdb_i_" + imdb_id
+    cached = get_json(cache_key)
+    if cached: return cached
+
     try:
         resp = requests.get(OMDB_BASE, params={
             "i": imdb_id, "type": "movie", "plot": "short", "apikey": OMDB_API_KEY
         }, timeout=10)
         data = resp.json()
         if data.get("Response") == "True":
-            return _normalize_omdb(data)
+            res = _normalize_omdb(data)
+            set_json(cache_key, res, ttl=86400 * 30)
+            return res
     except Exception as e:
         print(f"[OMDb] get_by_id error: {e}")
     return {}

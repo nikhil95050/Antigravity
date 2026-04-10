@@ -1,6 +1,7 @@
 import os
 import requests
 from typing import List, Dict, Optional
+from redis_cache import get_json, set_json
 
 class WatchmodeAdapter:
     """Adapter for Watchmode API to fetch streaming availability, localized to India."""
@@ -18,6 +19,11 @@ class WatchmodeAdapter:
         watchmode_id = self._get_watchmode_id(imdb_id, title)
         if not watchmode_id:
             return []
+            
+        cache_key = f"wm_src_{watchmode_id}"
+        cached = get_json(cache_key)
+        if cached:
+            return cached
 
         try:
             url = f"{self.BASE_URL}/title/{watchmode_id}/sources/"
@@ -31,7 +37,9 @@ class WatchmodeAdapter:
                 for s in sources:
                     if s.get("type") in priority_types:
                         names.add(s.get("name"))
-                return sorted(list(names))
+                res = sorted(list(names))
+                set_json(cache_key, res, ttl=86400 * 7)
+                return res
         except Exception as e:
             print(f"[Watchmode] Error fetching sources for {watchmode_id}: {e}")
         
@@ -39,6 +47,12 @@ class WatchmodeAdapter:
 
     def _get_watchmode_id(self, imdb_id: str, title: str) -> Optional[str]:
         """Resolve a Watchmode ID from IMDb ID or title, optimized for India region."""
+        
+        cache_key = "wm_id_" + (imdb_id or title).replace(" ", "_")
+        cached = get_json(cache_key)
+        if cached:
+            return cached
+
         try:
             # We search globally first or with region filter if supported for higher accuracy
             params = {"apiKey": self.api_key}
@@ -57,7 +71,9 @@ class WatchmodeAdapter:
                 if results:
                     # Sort results by relevance (if multiple, find the best match)
                     # For now, take the first result as it's usually the most relevant
-                    return str(results[0].get("id"))
+                    res = str(results[0].get("id"))
+                    set_json(cache_key, res, ttl=86400 * 30)
+                    return res
         except Exception as e:
             print(f"[Watchmode] Search error for {imdb_id}/{title}: {e}")
         return None

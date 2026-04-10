@@ -60,7 +60,7 @@ class BaseRepository(ABC):
     def upsert(self, chat_id: str, data: Dict[str, Any], id_field: str = "chat_id"):
         # We start fresh with Supabase, so we always try to write there first.
         if is_supabase_configured():
-            payload = self._map_to_supabase({**data, id_field: str(chat_id)})
+            payload = self._map_to_supabase({**data, "chat_id": str(chat_id)})
             self._bg(insert_rows, self.table_name, [payload], upsert=True, on_conflict=id_field)
         
         # Dual-write to Airtable for legacy support

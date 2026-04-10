@@ -64,8 +64,11 @@ class WatchlistRepository(BaseRepository):
             "director": record.get("Director", ""),
             "actors": record.get("Actors", ""),
             "poster": record.get("Poster URL", ""),
+            "poster_url": record.get("Poster URL", ""),
             "trailer": record.get("Trailer URL", ""),
+            "trailer_url": record.get("Trailer URL", ""),
             "streaming": record.get("Streaming Info", ""),
+            "streaming_info": record.get("Streaming Info", ""),
             "added_at": record.get("Added At", "")
         }
 
