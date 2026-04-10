@@ -1,0 +1,237 @@
+import os
+import json
+import time
+import threading
+import redis
+from dotenv import load_dotenv
+from services.logging_service import get_logger
+
+load_dotenv()
+logger = get_logger("redis_cache")
+
+# ─── URL Resolution ───────────────────────────────────────────────────────────
+REDIS_URL = (
+    os.environ.get("REDIS_URL", "").strip()
+    or os.environ.get("UPSTASH_REDIS_URL", "").strip()
+)
+
+def _is_placeholder(url: str) -> bool:
+    placeholders = ["your-db.upstash.io", "YOUR_PASSWORD", "example.com"]
+    return any(p in url for p in placeholders)
+
+# ─── Validate URL scheme on startup ──────────────────────────────────────────
+_VALID_SCHEMES = ("redis://", "rediss://", "unix://")
+if REDIS_URL:
+    if not any(REDIS_URL.startswith(s) for s in _VALID_SCHEMES):
+        logger.warning(f"REDIS_URL does not start with a valid scheme (redis://). Falling back.")
+        REDIS_URL = ""
+    elif _is_placeholder(REDIS_URL):
+        logger.info("REDIS_URL contains placeholders (e.g., 'your-db.upstash.io'). Operating in local-only mode.")
+        REDIS_URL = ""
+
+_local_cache: dict = {}
+_local_lock = threading.Lock()
+_redis_client = None
+_redis_init_lock = threading.Lock()
+_error_logged = False
+
+def get_redis():
+    """Return a connected Redis client, or None if unavailable."""
+    global _redis_client, _error_logged
+    if _redis_client is not None:
+        return _redis_client
+    if not REDIS_URL:
+        return None
+
+    with _redis_init_lock:
+        if _redis_client is not None:
+            return _redis_client
+        try:
+            client = redis.from_url(
+                REDIS_URL,
+                decode_responses=True,
+                socket_timeout=5,
+                socket_connect_timeout=5,
+                retry_on_timeout=True,
+            )
+            client.ping()
+            _redis_client = client
+            logger.info("Connected successfully to Redis.")
+        except Exception as e:
+            if not _error_logged:
+                logger.error(f"Redis connection failed: {e}")
+                logger.info("Falling back to in-process local cache only (non-persistent).")
+                _error_logged = True
+            _redis_client = None
+
+    return _redis_client
+
+def is_configured() -> bool:
+    return bool(REDIS_URL)
+
+def is_connected() -> bool:
+    client = get_redis()
+    if not client: return False
+    try:
+        return client.ping()
+    except Exception:
+        return False
+
+# ─── Core cache operations ────────────────────────────────────────────────────
+
+def get_json(key: str):
+    """Fetch a JSON value from local cache, then Redis."""
+    with _local_lock:
+        item = _local_cache.get(key)
+        if item:
+            val, expiry = item
+            if expiry is None or expiry > time.time():
+                return val
+            del _local_cache[key]
+
+    client = get_redis()
+    if not client:
+        return None
+
+    try:
+        raw = client.get(key)
+        if raw:
+            data = json.loads(raw)
+            with _local_lock:
+                _local_cache[key] = (data, time.time() + 60)
+            return data
+    except Exception as e:
+        logger.debug(f"Redis GET error for '{key}': {e}")
+    return None
+
+MAX_LOCAL_SIZE = 1000
+
+def set_json(key: str, value, ttl: int = None):
+    """Write a JSON value to local cache and Redis."""
+    with _local_lock:
+        if len(_local_cache) >= MAX_LOCAL_SIZE:
+            _local_cache.clear()
+        
+        expiry = time.time() + ttl if ttl else None
+        _local_cache[key] = (value, expiry)
+
+    client = get_redis()
+    if not client:
+        return
+
+    try:
+        val_str = json.dumps(value, ensure_ascii=False)
+        if ttl:
+            client.setex(key, ttl, val_str)
+        else:
+            client.set(key, val_str)
+    except Exception as e:
+        logger.debug(f"Redis SET error for '{key}': {e}")
+
+def delete_key(key: str):
+    """Delete a key from both local cache and Redis."""
+    with _local_lock:
+        _local_cache.pop(key, None)
+    client = get_redis()
+    if client:
+        try:
+            client.delete(key)
+        except Exception as e:
+            logger.debug(f"Redis DELETE error for '{key}': {e}")
+
+def delete_prefix(prefix: str):
+    """Delete all keys starting with prefix (local and Redis)."""
+    with _local_lock:
+        to_del = [k for k in _local_cache if k.startswith(prefix)]
+        for k in to_del: del _local_cache[k]
+    
+    client = get_redis()
+    if client:
+        try:
+            keys = client.keys(f"{prefix}*")
+            if keys: client.delete(*keys)
+        except Exception as e:
+            logger.debug(f"Redis DELETE_PREFIX error for '{prefix}': {e}")
+
+def clear_local_cache():
+    with _local_lock:
+        _local_cache.clear()
+
+# ─── Deduplication ────────────────────────────────────────────────────────────
+_seen_updates: dict = {}
+_seen_lock = threading.Lock()
+
+def mark_processed_update(update_id: str) -> bool:
+    key = f"processed_update:{update_id}"
+    client = get_redis()
+    if client:
+        try:
+            return bool(client.set(key, "1", nx=True, ex=3600))
+        except Exception as e:
+            logger.debug(f"Redis Dedup error: {e}")
+
+    with _seen_lock:
+        if update_id in _seen_updates:
+            return False
+        _seen_updates[update_id] = time.time() + 3600
+        if len(_seen_updates) > 5000:
+            cutoff = time.time()
+            expired = [k for k, v in _seen_updates.items() if v < cutoff]
+            for k in expired: del _seen_updates[k]
+    return True
+
+# ─── Rate Limiting ────────────────────────────────────────────────────────────
+
+def is_rate_limited(key: str, limit: int = 12, window_seconds: int = 60, user_tier: str = "user") -> bool:
+    """
+    Tiered Rate Limiter:
+    - user: 12 recs / min
+    - vip: 30 recs / min
+    - admin: unlimited (999)
+    """
+    full_key = f"rate_limit:{key}"
+    if user_tier == "admin": 
+        limit = 999
+    elif user_tier == "vip": 
+        limit = 30
+    else:
+        limit = 12 # Default per-user limit
+
+    client = get_redis()
+    if client:
+        lua_script = """
+        local current = redis.call('INCR', KEYS[1])
+        if current == 1 then
+            redis.call('EXPIRE', KEYS[1], ARGV[1])
+        end
+        return current
+        """
+        try:
+            current = client.eval(lua_script, 1, full_key, window_seconds)
+            return int(current) > limit
+        except Exception as e:
+            logger.debug(f"Redis Rate limit error: {e}")
+
+    with _local_lock:
+        val, expiry = _local_cache.get(full_key, (0, 0))
+        now = time.time()
+        if now > expiry:
+            _local_cache[full_key] = (1, now + window_seconds)
+            return False
+        new_val = val + 1
+        _local_cache[full_key] = (new_val, expiry)
+        return new_val > limit
+
+def increment(key: str, amount: int = 1):
+    client = get_redis()
+    if client:
+        try:
+            return client.incrby(key, amount)
+        except Exception as e:
+            logger.debug(f"Redis INCR error for '{key}': {e}")
+
+    with _local_lock:
+        val, expiry = _local_cache.get(key, (0, None))
+        new_val = (val or 0) + amount
+        _local_cache[key] = (new_val, expiry)
+        return new_val

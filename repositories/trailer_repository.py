@@ -1,35 +1,20 @@
-from typing import Any, Dict, Optional
-from datetime import datetime
+from typing import Any, Dict, List, Optional
 from .base_repository import BaseRepository
-from supabase_client import select_rows, insert_rows, is_configured
+from utils.time_utils import utc_now_iso
 
 class TrailerRepository(BaseRepository):
     def __init__(self):
-        super().__init__("trailer_cache", "Trailer Cache")
+        super().__init__("trailer_cache")
 
     def _map_to_supabase(self, data: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "movie_id": str(data.get("movie_id", "")),
             "trailer_url": data.get("trailer_url", ""),
-            "cached_at": data.get("cached_at") or datetime.utcnow().isoformat() + "Z"
-        }
-
-    def _map_to_airtable(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "Movie ID": str(data.get("movie_id", "")),
-            "Trailer URL": data.get("trailer_url", ""),
-            "Cached At": data.get("cached_at") or datetime.utcnow().isoformat() + "Z"
+            "cached_at": data.get("cached_at") or utc_now_iso()
         }
 
     def _map_from_supabase(self, row: Dict[str, Any]) -> Dict[str, Any]:
         return row
-
-    def _map_from_airtable(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "movie_id": str(record.get("Movie ID", "")),
-            "trailer_url": record.get("Trailer URL", ""),
-            "cached_at": record.get("Cached At", "")
-        }
 
     def get_trailer(self, movie_id: str) -> Optional[str]:
         data = self.get_by_id(movie_id, id_field="movie_id")
@@ -39,6 +24,6 @@ class TrailerRepository(BaseRepository):
         payload = {
             "movie_id": movie_id,
             "trailer_url": trailer_url,
-            "cached_at": datetime.utcnow().isoformat() + "Z"
+            "cached_at": utc_now_iso()
         }
         self.upsert(movie_id, payload, id_field="movie_id")

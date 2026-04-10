@@ -1,8 +1,11 @@
 import time
 import threading
 from typing import Dict, List
-from app_config import is_feature_enabled, set_feature_flag
+from config.app_config import is_feature_enabled, set_feature_flag
 from repositories.admin_repository import AdminRepository
+from services.logging_service import get_logger
+
+logger = get_logger("health")
 
 class HealthService:
     """Service for monitoring provider health and managing circuit breakers with persistence."""
@@ -38,7 +41,7 @@ class HealthService:
             
             is_enabled = True
             if cls._failure_counts[provider] >= cls.THRESHOLD:
-                print(f"[Health] Circuit broken for {provider}. Disabling feature.")
+                logger.warning(f"Circuit broken for {provider}. Disabling feature.")
                 set_feature_flag(provider, False)
                 is_enabled = False
 
@@ -57,7 +60,7 @@ class HealthService:
             with cls._lock:
                 last_fail = cls._last_failure_time.get(provider, 0)
             if time.time() - last_fail > cls.RECOVERY_TIME:
-                print(f"[Health] Attempting recovery for {provider}.")
+                logger.info(f"Attempting recovery for {provider}.")
                 cls.report_success(provider)
                 return True
             return False

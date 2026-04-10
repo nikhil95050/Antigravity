@@ -1,105 +1,95 @@
 import os
-import threading
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
-from airtable_client import is_airtable_available, get_table
-from supabase_client import insert_rows, select_rows, update_rows, is_configured as is_supabase_configured
+from config.supabase_client import insert_rows, select_rows, update_rows, is_configured as is_supabase_configured
+from config.redis_cache import get_json as cache_get_json, set_json as cache_set_json, delete_key as cache_delete_key
 
 class BaseRepository(ABC):
     """
-    Base repository class with dual-write and fallback-read capability.
-    Primary: Supabase
-    Secondary/Fallback: Airtable
+    Base repository class focused on Supabase.
+    Includes atomic upserts and optional Redis caching for lookups.
     """
     
-    def __init__(self, table_name: str, airtable_name: str):
+    def __init__(self, table_name: str):
         self.table_name = table_name
-        self.airtable_name = airtable_name
 
     def _bg(self, fn, *args, **kwargs):
-        t = threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True)
-        t.start()
+        """Dispatches a background task using asyncio."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._wrap_async(fn, *args, **kwargs))
+        except RuntimeError:
+            # Fallback for non-async contexts (rare but possible during init)
+            import threading
+            threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True).start()
+
+    async def _wrap_async(self, fn, *args, **kwargs):
+        """Ensures synchronous repository methods can run in the background."""
+        if asyncio.iscoroutinefunction(fn):
+            res = await fn(*args, **kwargs)
+        else:
+            res = await asyncio.to_thread(fn, *args, **kwargs)
+        
+        # If the result is a (data, error) tuple, log the error
+        if isinstance(res, tuple) and len(res) == 2 and res[1]:
+            from services.logging_service import get_logger
+            get_logger("repo_bg").error(f"Background task {fn.__name__} failed: {res[1]}")
 
     @abstractmethod
     def _map_to_supabase(self, data: Dict[str, Any]) -> Dict[str, Any]:
         pass
 
     @abstractmethod
-    def _map_to_airtable(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
     def _map_from_supabase(self, row: Dict[str, Any]) -> Dict[str, Any]:
         pass
 
-    @abstractmethod
-    def _map_from_airtable(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        pass
+    def get_by_id(self, chat_id: str, id_field: str = "chat_id", use_cache: bool = True) -> Optional[Dict[str, Any]]:
+        # 1. Try Cache
+        cache_key = f"repo:{self.table_name}:{chat_id}"
+        if use_cache:
+            cached = cache_get_json(cache_key)
+            if cached:
+                return cached
 
-    def get_by_id(self, chat_id: str, id_field: str = "chat_id") -> Optional[Dict[str, Any]]:
-        # 1. Try Supabase
+        # 2. Try Supabase
         if is_supabase_configured():
             rows, error = select_rows(self.table_name, {id_field: str(chat_id)}, limit=1)
             if not error and rows:
-                return self._map_from_supabase(rows[0])
+                data = self._map_from_supabase(rows[0])
+                if use_cache:
+                    cache_set_json(cache_key, data, ttl=300) # Cache for 5 mins
+                return data
 
-        # 2. Try Airtable
-        if is_airtable_available():
-            try:
-                # Airtable formula for numeric or string chat id
-                formula = f"{{{self._airtable_id_field()}}}={chat_id}" if str(chat_id).isdigit() else f"{{{self._airtable_id_field()}}}='{chat_id}'"
-                records = get_table(self.airtable_name).all(formula=formula)
-                if records:
-                    return self._map_from_airtable(records[0]["fields"])
-            except Exception:
-                pass
-        
         return None
 
     def upsert(self, chat_id: str, data: Dict[str, Any], id_field: str = "chat_id"):
-        # We start fresh with Supabase, so we always try to write there first.
         if is_supabase_configured():
             payload = self._map_to_supabase({**data, "chat_id": str(chat_id)})
+            
+            # Update cache immediately for consistency
+            cache_key = f"repo:{self.table_name}:{chat_id}"
+            existing = self.get_by_id(chat_id, id_field=id_field, use_cache=True) or {}
+            existing.update(data)
+            cache_set_json(cache_key, existing, ttl=300)
+            
+            # Fire and forget to Supabase
             self._bg(insert_rows, self.table_name, [payload], upsert=True, on_conflict=id_field)
-        
-        # Dual-write to Airtable for legacy support
-        if is_airtable_available():
-            self._bg(self._airtable_upsert, chat_id, data, id_field)
-
-    def _airtable_upsert(self, chat_id: str, data: Dict[str, Any], id_field: str):
-        try:
-            table = get_table(self.airtable_name)
-            formula = f"{{{self._airtable_id_field()}}}={chat_id}" if str(chat_id).isdigit() else f"{{{self._airtable_id_field()}}}='{chat_id}'"
-            records = table.all(formula=formula)
-            at_data = self._map_to_airtable({**data, id_field: chat_id})
-            if records:
-                table.update(records[0]["id"], at_data)
-            else:
-                table.create(at_data)
-        except Exception:
-            pass
 
     def bulk_upsert(self, chat_id: str, data_list: List[Dict[str, Any]], id_field: str = "chat_id"):
         if not data_list: return
         
-        # 1. Supabase Bulk Write
         if is_supabase_configured():
             payloads = [self._map_to_supabase({**d, "chat_id": str(chat_id)}) for d in data_list]
             self._bg(insert_rows, self.table_name, payloads, upsert=True, on_conflict=id_field)
             
-        # 2. Airtable Bulk Write
-        if is_airtable_available():
-            self._bg(self._airtable_bulk_upsert, chat_id, data_list, id_field)
-
-    def _airtable_bulk_upsert(self, chat_id: str, data_list: List[Dict[str, Any]], id_field: str):
-        try:
-            table = get_table(self.airtable_name)
-            at_payloads = [self._map_to_airtable({**d, "chat_id": chat_id}) for d in data_list]
-            for i in range(0, len(at_payloads), 10):
-                table.batch_create(at_payloads[i:i+10])
-        except Exception:
-            pass
-
-    def _airtable_id_field(self) -> str:
-        return "Chat ID" if self.airtable_name != "Trailer Cache" else "Movie ID"
+            # Invalidate specific cache
+            cache_key = f"repo:{self.table_name}:{chat_id}"
+            cache_delete_key(cache_key)
+    def delete_rows(self, filters: Dict[str, Any]):
+        """Targeted deletion from Supabase."""
+        if is_supabase_configured():
+            from config.supabase_client import delete_rows as supabase_delete
+            return supabase_delete(self.table_name, filters)
+        return None, "Not configured"
