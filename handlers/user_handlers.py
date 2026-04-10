@@ -92,7 +92,7 @@ async def handle_min_rating(chat_id, input_text, **kwargs):
     try:
         val = float(parts[1])
         if not (0 <= val <= 10): raise ValueError()
-    except:
+    except (ValueError, TypeError):
         await send_message(chat_id, "Please provide a valid rating between 0 and 10.")
         return
         

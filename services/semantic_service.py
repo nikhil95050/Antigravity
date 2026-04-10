@@ -26,7 +26,7 @@ class SemanticService:
         
         # 1. Cache Check
         clean_text = text.lower().strip()
-        text_hash = hashlib.md5(clean_text.encode()).hexdigest()
+        text_hash = hashlib.sha256(clean_text.encode()).hexdigest()
         cache_key = f"semantic_intent:{text_hash}"
         cached = get_json(cache_key)
         if cached:

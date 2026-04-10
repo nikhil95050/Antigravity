@@ -1,5 +1,7 @@
 from typing import List, Dict, Optional
-from services.logging_service import LoggingService
+from services.logging_service import LoggingService, get_logger
+
+logger = get_logger("recommendation_service")
 
 class RecommendationService:
     """Service layer for recommendation logic with performance optimizations."""
@@ -50,7 +52,7 @@ class RecommendationService:
             if not self.trailer_repo: return
             trailer = self.trailer_repo.get_trailer(movie_id)
             if not trailer:
-                from clients.omdb_client_helper import get_trailer_url_async
+                from clients.omdb_client import get_trailer_url_async
                 trailer = await LoggingService.profile_call_async(
                     chat_id, intent, "fetch_trailer", "Standard",
                     get_trailer_url_async, title, year
@@ -80,9 +82,17 @@ class RecommendationService:
 
         await asyncio.gather(get_trailer(), get_streaming())
 
+    @staticmethod
+    def _parse_genre_field(value) -> set:
+        if isinstance(value, list):
+            return set(g.strip().lower() for g in value if g and g.strip())
+        if isinstance(value, str) and value.strip():
+            return set(g.strip().lower() for g in value.split(",") if g.strip())
+        return set()
+
     def _rank_candidates(self, movies: List[Dict], user: Dict, min_rating: float = 0.0) -> List[Dict]:
-        pref_genres = set(g.strip().lower() for g in (user or {}).get("preferred_genres", "").split(",") if g.strip())
-        dis_genres = set(g.strip().lower() for g in (user or {}).get("disliked_genres", "").split(",") if g.strip())
+        pref_genres = self._parse_genre_field((user or {}).get("preferred_genres", []))
+        dis_genres = self._parse_genre_field((user or {}).get("disliked_genres", []))
         
         ranked_movies = []
         for m in movies:
@@ -142,7 +152,7 @@ class RecommendationService:
     async def background_enrich_single_update(self, chat_id: str, message_id: int, movie: Dict, index: int, total: int, intent: str):
         """Background task to fully enrich a single movie and update its specific Telegram card."""
         import asyncio
-        from telegram_helpers import edit_message_caption, edit_message
+        from clients.telegram_helpers import edit_message_caption, edit_message
         
         # 1. Perform full enrichment for this one movie
         await self._enrich_single_async(movie, chat_id, intent)

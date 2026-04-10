@@ -70,7 +70,7 @@ class WatchmodeClient:
 
     async def _is_budget_ok(self) -> bool:
         """Token bucket check to stay under 1000/day limit."""
-        from redis_cache import get_redis
+        from config.redis_cache import get_redis
         client = get_redis()
         if not client: return True
         try:

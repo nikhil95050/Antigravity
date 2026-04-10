@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 import json
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from utils.time_utils import utc_now_iso
@@ -152,6 +153,17 @@ class LoggingService:
             _logger.warning(f"Event {intent}:{step} was slow", extra=log_data)
         else:
             _logger.info(f"Event {intent}:{step} processed", extra=log_data)
+
+    @staticmethod
+    @contextmanager
+    def profile_context(label: str):
+        """Context manager for profiling a block of code by name."""
+        start = time.time()
+        try:
+            yield
+        finally:
+            latency = int((time.time() - start) * 1000)
+            _logger.info(f"Profile [{label}] completed in {latency}ms")
 
     @staticmethod
     def profile_call(chat_id, intent, step, provider, func, *args, request_id="N/A", **kwargs):

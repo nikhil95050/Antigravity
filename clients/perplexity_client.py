@@ -38,7 +38,7 @@ async def _is_budget_ok() -> bool:
         if usage and int(usage) >= DAILY_TOKEN_CAP:
             return False
         return True
-    except:
+    except Exception:
         return True
 
 async def ask_perplexity(prompt: str, system: str = "", model: str = "sonar", chat_id: str = "system") -> str:
@@ -54,7 +54,7 @@ async def ask_perplexity(prompt: str, system: str = "", model: str = "sonar", ch
     if not system:
         system = "You are a movie recommendation assistant. Always respond with valid JSON arrays of strings only."
 
-    cache_key = "px_" + hashlib.md5((model + system + normalized).encode()).hexdigest()
+    cache_key = "px_" + hashlib.sha256((model + system + normalized).encode()).hexdigest()
     cached = get_json(cache_key)
     if cached: return cached
 
@@ -94,7 +94,7 @@ async def ask_perplexity(prompt: str, system: str = "", model: str = "sonar", ch
                         new_usage = client.incrby("px_tokens_today", total)
                         if new_usage == total:
                             client.expire("px_tokens_today", 86400)
-                    except: pass
+                    except Exception: pass
                 
                 if content:
                     set_json(cache_key, content, ttl=86400 * 7)

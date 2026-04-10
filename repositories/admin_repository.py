@@ -71,8 +71,8 @@ class AdminRepository(BaseRepository):
             insert_rows("admin_audit", [payload])
 
     def cleanup_old_logs(self, days: int = 7):
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         if not is_configured(): return
-        limit_date = (datetime.utcnow() - timedelta(days=days)).isoformat() + "Z"
+        limit_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
         delete_rows("error_logs", {"timestamp": f"lt.{limit_date}"})
         delete_rows("admin_audit", {"timestamp": f"lt.{limit_date}"})

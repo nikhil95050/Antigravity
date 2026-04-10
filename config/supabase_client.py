@@ -35,18 +35,21 @@ def _headers(prefer: str | None = None) -> dict:
         headers["Prefer"] = prefer
     return headers
 
+def _build_url_and_headers(path: str, prefer: str | None = None):
+    return f"{REST_BASE}/{path.lstrip('/')}", _headers(prefer)
+
+def _parse_response(resp):
+    if 200 <= resp.status_code < 300:
+        return (resp.json() if resp.text.strip() else None), None
+    return None, f"Supabase error {resp.status_code}: {resp.text[:500]}"
+
 async def _request_async(method: str, path: str, params=None, json_body=None, prefer: str | None = None):
     if not is_configured():
         return None, "supabase_not_configured"
-    
-    url = f"{REST_BASE}/{path.lstrip('/')}"
+    url, headers = _build_url_and_headers(path, prefer)
     try:
-        resp = await _async_client.request(
-            method, url, headers=_headers(prefer), params=params, json=json_body
-        )
-        if 200 <= resp.status_code < 300:
-            return (resp.json() if resp.text.strip() else None), None
-        return None, f"Supabase error {resp.status_code}: {resp.text[:500]}"
+        resp = await _async_client.request(method, url, headers=headers, params=params, json=json_body)
+        return _parse_response(resp)
     except Exception as e:
         return None, f"Supabase network error: {str(e)}"
 
@@ -54,15 +57,10 @@ def _request_sync(method: str, path: str, params=None, json_body=None, prefer: s
     """Fallback sync request for repositories still using threads."""
     if not is_configured():
         return None, "supabase_not_configured"
-    
-    url = f"{REST_BASE}/{path.lstrip('/')}"
+    url, headers = _build_url_and_headers(path, prefer)
     try:
-        resp = _sync_client.request(
-            method, url, headers=_headers(prefer), params=params, json=json_body
-        )
-        if 200 <= resp.status_code < 300:
-            return (resp.json() if resp.text.strip() else None), None
-        return None, f"Supabase error {resp.status_code}: {resp.text[:500]}"
+        resp = _sync_client.request(method, url, headers=headers, params=params, json=json_body)
+        return _parse_response(resp)
     except Exception as e:
         return None, f"Supabase network error: {str(e)}"
 
@@ -120,5 +118,5 @@ def is_available() -> bool:
     try:
         data, error = select_rows("sessions", limit=0)
         return error is None
-    except:
+    except Exception:
         return False

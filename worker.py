@@ -42,7 +42,7 @@ def process_job(job_data):
         
         if handler:
             # Use profiler for background jobs
-            with LoggingService.profile_call(func_name):
+            with LoggingService.profile_context(func_name):
                 handler(*args, **kwargs)
         else:
             logger.error(f"No handler for '{func_name}'")

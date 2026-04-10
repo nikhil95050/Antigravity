@@ -45,7 +45,7 @@ class ApiUsageRepository(BaseRepository):
 
     def _safe_supabase_log(self, payload):
         try:
-            from config.supabase_client import insert_row
-            insert_row(self.table_name, self._map_to_supabase(payload))
+            from config.supabase_client import insert_rows
+            insert_rows(self.table_name, [self._map_to_supabase(payload)])
         except Exception as e:
             logger.error(f"Supabase log failed for {payload.get('provider')}: {e}")

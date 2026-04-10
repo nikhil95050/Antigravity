@@ -110,8 +110,12 @@ def set_json(key: str, value, ttl: int = None):
     """Write a JSON value to local cache and Redis."""
     with _local_lock:
         if len(_local_cache) >= MAX_LOCAL_SIZE:
-            _local_cache.clear()
-        
+            # Evict oldest 20% by insertion time (expiry timestamp)
+            sorted_keys = sorted(_local_cache.keys(),
+                                 key=lambda k: _local_cache[k][1] or 0)
+            for k in sorted_keys[:MAX_LOCAL_SIZE // 5]:
+                del _local_cache[k]
+
         expiry = time.time() + ttl if ttl else None
         _local_cache[key] = (value, expiry)
 
@@ -148,8 +152,13 @@ def delete_prefix(prefix: str):
     client = get_redis()
     if client:
         try:
-            keys = client.keys(f"{prefix}*")
-            if keys: client.delete(*keys)
+            cursor = 0
+            while True:
+                cursor, keys = client.scan(cursor, match=f"{prefix}*", count=100)
+                if keys:
+                    client.delete(*keys)
+                if cursor == 0:
+                    break
         except Exception as e:
             logger.debug(f"Redis DELETE_PREFIX error for '{prefix}': {e}")
 
@@ -173,11 +182,15 @@ def mark_processed_update(update_id: str) -> bool:
     with _seen_lock:
         if update_id in _seen_updates:
             return False
+        # Always clean expired entries before adding new ones
+        cutoff = time.time()
+        expired = [k for k, v in _seen_updates.items() if v < cutoff]
+        for k in expired: del _seen_updates[k]
+        # Hard cap to prevent unbounded growth
+        if len(_seen_updates) >= 5000:
+            oldest_keys = sorted(_seen_updates, key=_seen_updates.get)[:1000]
+            for k in oldest_keys: del _seen_updates[k]
         _seen_updates[update_id] = time.time() + 3600
-        if len(_seen_updates) > 5000:
-            cutoff = time.time()
-            expired = [k for k, v in _seen_updates.items() if v < cutoff]
-            for k in expired: del _seen_updates[k]
     return True
 
 # ─── Rate Limiting ────────────────────────────────────────────────────────────

@@ -19,7 +19,7 @@ class DiscoveryService:
         import hashlib
         
         # 1. Semantic Cache Check
-        prompt_hash = hashlib.md5(prompt.lower().encode()).hexdigest()
+        prompt_hash = hashlib.sha256(prompt.lower().encode()).hexdigest()
         cache_key = f"prompt_cache:{prompt_hash}"
         cached = get_json(cache_key)
         if cached:
@@ -53,7 +53,7 @@ class DiscoveryService:
 
     async def get_trending_movies(self, limit: int = 8, chat_id: str = "system") -> List[Dict]:
         from config.redis_cache import get_json, set_json
-        from clients.omdb_client_helper import fetch_movies_by_titles_async
+        from clients.omdb_client import fetch_movies_by_titles_async
         
         cache_key = "global_trending_movies"
         cached = get_json(cache_key)
@@ -71,7 +71,7 @@ class DiscoveryService:
     async def get_weekly_trending_digest(self, limit: int = 3, chat_id: str = "system") -> List[Dict]:
         """Special digest for weekly broadcasts."""
         from config.redis_cache import get_json, set_json
-        from clients.omdb_client_helper import fetch_movies_by_titles_async
+        from clients.omdb_client import fetch_movies_by_titles_async
         
         cache_key = "weekly_trending_digest"
         cached = get_json(cache_key)
@@ -87,7 +87,7 @@ class DiscoveryService:
         return movies
 
     async def get_surprise_movies(self, limit: int = 8, chat_id: str = "system") -> List[Dict]:
-        from clients.omdb_client_helper import fetch_movies_by_titles_async
+        from clients.omdb_client import fetch_movies_by_titles_async
         # Added strict cinematic constraints to avoid non-movie results (like cities)
         prompt = (
             f"Identify a list of {limit} 'hidden gem' movies. These should be real, critically acclaimed movies "
@@ -98,7 +98,7 @@ class DiscoveryService:
 
     async def get_star_movies(self, name: str, limit: int = 5, chat_id: str = "system") -> List[Dict]:
         """Discover movies based on an actor or director with conversational reasoning."""
-        from clients.omdb_client_helper import fetch_movies_by_titles_async
+        from clients.omdb_client import fetch_movies_by_titles_async
         prompt = (
             f"You are CineMate. The user is a big fan of '{name}'. "
             f"Suggest {limit} of their most iconic or fascinating movies. "
@@ -115,7 +115,7 @@ class DiscoveryService:
             match = re.search(r'\[.*\]', raw, re.DOTALL)
             if match:
                 recs = json.loads(match.group(0))
-        except: pass
+        except Exception: pass
         if not recs: return []
         
         titles = [r.get("title") for r in recs if r.get("title")]
@@ -129,7 +129,7 @@ class DiscoveryService:
         return movies
 
     async def get_similar_movies(self, seed_title: str, limit: int = 8, chat_id: str = "system") -> List[Dict]:
-        from clients.omdb_client_helper import fetch_movies_by_titles_async
+        from clients.omdb_client import fetch_movies_by_titles_async
         # Heuristic: If seed_title is long or has specific keywords, it's a search query 
         is_query = len(seed_title.split()) > 3 or any(k in seed_title.lower() for k in ["movie", "about", "like", "with", "film"])
         
@@ -143,7 +143,7 @@ class DiscoveryService:
 
     async def lookup_movie_and_similar(self, title: str, limit: int = 5, chat_id: str = "system") -> List[Dict]:
         """Parallelize main movie lookup and similar title generation for speed."""
-        from clients.omdb_client_helper import omdb_get_by_title_async, fetch_movies_by_titles_async
+        from clients.omdb_client import omdb_get_by_title_async, fetch_movies_by_titles_async
         
         async def get_main():
             return await omdb_get_by_title_async(title)
@@ -159,7 +159,7 @@ class DiscoveryService:
 
     async def get_question_engine_recs(self, session: dict, user: dict, limit: int = 5, chat_id: str = "system") -> list:
         """Generate personalized recommendations with CineMate reasoning and permanent profile context."""
-        from clients.omdb_client_helper import fetch_movies_by_titles_async
+        from clients.omdb_client import fetch_movies_by_titles_async
         
         # 1. Current Session Context
         current = []
@@ -211,7 +211,7 @@ class DiscoveryService:
             match = re.search(r'\[.*\]', raw, re.DOTALL)
             if match:
                 recs = json.loads(match.group(0))
-        except: pass
+        except Exception: pass
         
         if not recs: return []
         

@@ -1,10 +1,12 @@
 import asyncio
+import functools
 from services.container import admin_repo, usage_repo
 from clients.telegram_helpers import send_message
 from config.supabase_client import select_rows
 
 def admin_only(func):
     """Decorator to restrict access to admin handlers."""
+    @functools.wraps(func)
     async def wrapper(chat_id, **kwargs):
         if not admin_repo.is_admin(str(chat_id)):
             return
@@ -30,11 +32,13 @@ async def handle_admin_stats(chat_id, **kwargs):
 
 @admin_only
 async def handle_admin_clear_cache(chat_id, **kwargs):
-    from redis_cache import get_redis
+    from config.redis_cache import get_redis, delete_prefix, clear_local_cache
     client = get_redis()
     if client:
-        client.flushall()
-        await send_message(chat_id, "✅ Redis cache cleared.")
+        for prefix in ["omdb_", "prompt_cache:", "global_", "weekly_", "px_", "wm_", "history:", "cine_"]:
+            delete_prefix(prefix)
+        clear_local_cache()
+        await send_message(chat_id, "✅ Application cache cleared (targeted key deletion).")
     else:
         await send_message(chat_id, "❌ Redis client not available.")
 
@@ -102,7 +106,6 @@ async def handle_admin_broadcast(chat_id, input_text, **kwargs):
     rows, _ = select_rows("users", {}, limit=5000)
     count = len(rows) if rows else 0
     
-    from clients.telegram_helpers import build_confirmation_keyboard
     markup = {
         "inline_keyboard": [[
             {"text": "🚀 Confirm & Send", "callback_data": f"admin_b_send_{len(msg)}"},
@@ -111,14 +114,14 @@ async def handle_admin_broadcast(chat_id, input_text, **kwargs):
     }
     
     # Store message temporarily in Redis for confirmation flow
-    from redis_cache import set_json
+    from config.redis_cache import set_json
     set_json(f"broadcast_pending:{chat_id}", {"msg": msg, "count": count}, ttl=300)
     
     await send_message(chat_id, f"📝 <b>Broadcast Preview:</b>\n\n{msg}\n\n⚠️ This will be sent to <b>{count} users</b>. Are you sure?", markup)
 
 @admin_only
 async def handle_admin_broadcast_confirm(chat_id, input_text, **kwargs):
-    from redis_cache import get_json, delete_key
+    from config.redis_cache import get_json, delete_key
     pending = get_json(f"broadcast_pending:{chat_id}")
     if not pending:
         await send_message(chat_id, "❌ Broadcast session expired or not found.")
@@ -150,7 +153,7 @@ async def handle_admin_broadcast_confirm(chat_id, input_text, **kwargs):
 
 @admin_only
 async def handle_admin_broadcast_cancel(chat_id, **kwargs):
-    from redis_cache import delete_key
+    from config.redis_cache import delete_key
     delete_key(f"broadcast_pending:{chat_id}")
     await send_message(chat_id, "❌ Broadcast cancelled.")
 
@@ -159,7 +162,7 @@ async def handle_admin_disable_provider(chat_id, input_text, **kwargs):
     parts = input_text.split()
     if len(parts) >= 2:
         provider = parts[1].strip().lower()
-        from app_config import set_feature_flag
+        from config.app_config import set_feature_flag
         set_feature_flag(provider, False)
         await send_message(chat_id, f"🚫 Provider <b>{provider}</b> disabled.")
 
@@ -168,6 +171,6 @@ async def handle_admin_enable_provider(chat_id, input_text, **kwargs):
     parts = input_text.split()
     if len(parts) >= 2:
         provider = parts[1].strip().lower()
-        from app_config import set_feature_flag
+        from config.app_config import set_feature_flag
         set_feature_flag(provider, True)
         await send_message(chat_id, f"✅ Provider <b>{provider}</b> enabled.")

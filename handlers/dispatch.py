@@ -1,3 +1,4 @@
+import asyncio
 from contextvars import ContextVar
 from services.logging_service import interaction_context
 
@@ -5,10 +6,21 @@ from clients.telegram_helpers import (
     send_message, send_photo, build_movie_buttons, build_iteration_buttons, 
     build_pagination_keyboard
 )
-from .user_handlers import *
-from .rec_handlers import *
-from .callback_handlers import *
-from .admin_handlers import *
+from .user_handlers import (
+    handle_start, handle_reset, handle_help, handle_history,
+    handle_watchlist, handle_search, handle_min_rating, handle_fallback
+)
+from .rec_handlers import (
+    handle_movie, handle_trending, handle_surprise, handle_questioning,
+    handle_more_like, handle_more_suggestions, handle_star, handle_share
+)
+from .callback_handlers import handle_watched, handle_save, handle_like, handle_dislike
+from .admin_handlers import (
+    handle_admin_health, handle_admin_stats, handle_admin_clear_cache,
+    handle_admin_errors, handle_admin_usage, handle_admin_broadcast,
+    handle_admin_broadcast_confirm, handle_admin_broadcast_cancel,
+    handle_admin_disable_provider, handle_admin_enable_provider
+)
 
 INTENT_MAP = {
     "start": handle_start,
@@ -39,6 +51,8 @@ INTENT_MAP = {
     "admin_broadcast_cancel": handle_admin_broadcast_cancel,
     "admin_disable_provider": handle_admin_disable_provider,
     "admin_enable_provider": handle_admin_enable_provider,
+    "star": handle_star,
+    "share": handle_share,
 }
 
 async def dispatch_intent(intent: str, **kwargs):
@@ -58,16 +72,14 @@ async def dispatch_intent(intent: str, **kwargs):
         await send_message(chat_id, "I'm not sure how to handle that. Try /help.")
         return
 
-    # 1. Provide core abstractions from the container
-    from config.supabase_client import is_configured as supabase_ready
-    from services.container import session_service, user_service
-    chat_id = kwargs.get("chat_id")
-    
-    # 2. Lazy load state (only if we have a chat_id)
-    session = None
-    user = None
-    if chat_id:
+    # Use session/user passed from main.py to avoid double fetch
+    session = kwargs.get("session")
+    user = kwargs.get("user")
+    if not session and chat_id:
+        from services.container import session_service
         session = session_service.get_session(str(chat_id))
+    if not user and chat_id:
+        from services.container import user_service
         user = user_service.get_user(str(chat_id))
 
     # 3. Call handler with required positional arguments

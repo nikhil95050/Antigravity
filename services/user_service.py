@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Optional
+from utils.time_utils import utc_now_iso
 
 class UserService:
     def __init__(self, user_repo=None):
@@ -41,15 +42,14 @@ class UserService:
         if not rows: return
 
         # 2. Extract multidimensional data
-        from repositories.history_repository import HistoryRepository
-        history_repo = HistoryRepository()
+        from services.container import history_repo
         
         genre_counts = {}
         actor_counts = {}
         director_counts = {}
         
         for r in rows:
-            movie = history_repo.get_movie_from_history(chat_id, r["movie_id"])
+            movie = history_repo.get_entry(chat_id, r["movie_id"])
             if not movie: continue
             
             # Genres

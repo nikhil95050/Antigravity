@@ -69,13 +69,13 @@ def _update_last_recs(chat_id, recs):
 def _get_page(input_text: str) -> int:
     if "p" not in input_text: return 1
     try: return int(input_text.split("p")[-1])
-    except: return 1
+    except Exception: return 1
 
 def _get_last_recs(session) -> list:
     try:
         raw = session.get("last_recs_json", "[]")
         return json.loads(raw) if isinstance(raw, str) else raw
-    except: return []
+    except Exception: return []
 
 def _find_movie_in_recs(movies: list, movie_id: str) -> Optional[dict]:
     return next((m for m in movies if str(m.get("movie_id")) == str(movie_id)), None)

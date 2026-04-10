@@ -4,8 +4,8 @@ import asyncio
 import hashlib
 import json
 from typing import List, Dict
-from app_config import is_feature_enabled
-from redis_cache import get_json, set_json
+from config.app_config import is_feature_enabled
+from config.redis_cache import get_json, set_json
 from services.logging_service import get_logger
 
 from services.container import container
@@ -32,7 +32,7 @@ async def omdb_get_by_title_async(title: str, chat_id: str = "system") -> dict:
     
     # 0. Level 0: Global Discovery Cache
     for query in queries:
-        cache_key = "omdb_t_" + hashlib.md5(query.lower().encode()).hexdigest()
+        cache_key = "omdb_t_" + hashlib.sha256(query.lower().encode()).hexdigest()
         cached = get_json(cache_key)
         if cached: return cached
 
@@ -40,7 +40,7 @@ async def omdb_get_by_title_async(title: str, chat_id: str = "system") -> dict:
         try:
             from services.container import container
             # We use movie_id hash of query if we don't know it yet
-            temp_id = hashlib.md5(query.lower().encode()).hexdigest()
+            temp_id = hashlib.sha256(query.lower().encode()).hexdigest()
             mirror_repo = getattr(container, "metadata_repo", None)
             if mirror_repo:
                 mirrored = mirror_repo.get_metadata(temp_id)

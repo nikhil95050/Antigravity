@@ -24,7 +24,7 @@ class MetadataRepository(BaseRepository):
         if isinstance(raw, str):
             try:
                 return json.loads(raw)
-            except:
+            except Exception:
                 return {}
         return raw or {}
 

@@ -1,27 +1,28 @@
 import os
 import asyncio
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 
-from config.app_config import load_config, get_config
-from config.redis_cache import get_redis, validate_redis_connection
+from config.redis_cache import get_redis, mark_processed_update, is_rate_limited
 from clients.telegram_helpers import (
-    BASE_URL, send_message, set_webhook, delete_webhook, build_iteration_buttons
+    BASE_URL, send_message, set_webhook, build_iteration_buttons, answer_callback_query
 )
 from handlers.dispatch import dispatch_intent
 from handlers.normalizer import normalize_input, detect_intent
+from services.logging_service import get_logger, LoggingService
+from services.queue_service import enqueue_job
 
 # Services are imported from container
 from services.container import (
-    container, 
-    session_service, 
-    user_service, 
-    movie_service, 
+    container,
+    session_service,
+    user_service,
+    movie_service,
     admin_repo
 )
 
@@ -31,8 +32,7 @@ logger = get_logger("main")
 # Early Configuration Validation
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 if not TELEGRAM_BOT_TOKEN:
-    logger.critical("TELEGRAM_BOT_TOKEN is not set. Bot cannot start.")
-    exit(1)
+    raise RuntimeError("TELEGRAM_BOT_TOKEN is not set. Bot cannot start.")
 
 # In-memory metrics for /health
 _metrics = {
@@ -52,7 +52,7 @@ async def cleanup_loop():
     logger.info("Background cleanup loop started.")
     while True:
         try:
-            admin_repo.cleanup_old_logs(days=7)
+            await asyncio.to_thread(admin_repo.cleanup_old_logs, days=7)
             logger.info("Scheduled cleanup of old logs completed.")
             await asyncio.sleep(86400) # Sleep for 24h
         except Exception as e:
@@ -75,15 +75,19 @@ async def periodic_tasks_loop():
     from handlers.common import send_movies_async
     from config.supabase_client import select_rows
 
+    last_weekly_hour = -1
+    last_daily_hour = -1
+
     while True:
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
+
             # 1. Weekly Trending Digest (Mondays at 10 AM UTC)
-            if now.weekday() == 0 and now.hour == 10:
-                from config.redis_cache import get_redis
+            if now.weekday() == 0 and now.hour == 10 and last_weekly_hour != now.hour:
+                last_weekly_hour = now.hour
                 redis_client = get_redis()
                 week_key = f"weekly_digest_sent:{now.strftime('%Y-%W')}"
-                
+
                 if redis_client and not redis_client.get(week_key):
                     logger.info("Executing Weekly Trending Digest...")
                     movies = await discovery_service.get_weekly_trending_digest()
@@ -93,14 +97,13 @@ async def periodic_tasks_loop():
                             chat_id = u.get("chat_id")
                             if chat_id:
                                 await send_movies_async(chat_id, movies, "🔥 <b>Weekly Trending Digest:</b>")
-                        
+
                         # Mark as sent for this week
                         redis_client.set(week_key, "1", ex=604800) # 7 days
-                
-                await asyncio.sleep(3600) # Prevents re-triggering within the same hour
 
             # 2. Daily Watchlist Reminder (Daily at 6 PM UTC)
-            if now.hour == 18:
+            if now.hour == 18 and last_daily_hour != now.hour:
+                last_daily_hour = now.hour
                 logger.info("Executing Daily Watchlist Reminders...")
                 users, _ = select_rows("users", {}, limit=5000)
                 for u in (users or []):
@@ -110,7 +113,6 @@ async def periodic_tasks_loop():
                         if movie:
                             await send_message(chat_id, "🍿 <b>Don't forget this gem in your watchlist:</b>")
                             await send_movies_async(chat_id, [movie])
-                await asyncio.sleep(3600)
 
             await asyncio.sleep(600) # Check every 10 mins
         except Exception as e:
@@ -118,19 +120,23 @@ async def periodic_tasks_loop():
             await asyncio.sleep(3600)
 
 
+_background_tasks = []
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup tasks
     logger.info("🎬 Movie Bot starting up...")
-    asyncio.create_task(cleanup_loop())
-    asyncio.create_task(periodic_tasks_loop())
-    asyncio.create_task(prewarm_popular_caches())
-    
+    _background_tasks.append(asyncio.create_task(cleanup_loop()))
+    _background_tasks.append(asyncio.create_task(periodic_tasks_loop()))
+    _background_tasks.append(asyncio.create_task(prewarm_popular_caches()))
+
     logger.info("Bot API started and ready.")
     yield
-    
+
     # Shutdown
     logger.info("Bot API shutting down...")
+    for task in _background_tasks:
+        task.cancel()
     await container.teardown()
     logger.info("Bot API shutdown complete.")
 
@@ -164,7 +170,7 @@ async def process_update_async(update: dict):
 
         if is_rate_limited(f"rate:{chat_id}", limit=12, window_seconds=60, user_tier=user_tier):
             _metric_inc("rate_limited")
-            send_message(chat_id, "You're moving a bit fast! Please wait a moment.")
+            await send_message(chat_id, "You're moving a bit fast! Please wait a moment.")
             return
 
         intent = detect_intent(normalized["input_text"], session)
@@ -205,7 +211,7 @@ async def health():
     
     return {
         "status": "ok", 
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "infrastructure": {
             "supabase_ready": supabase_configured(),
             "redis_connected": redis_connected()

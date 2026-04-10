@@ -1,7 +1,7 @@
 import sys
 import time
 import asyncio
-from intent_handler import dispatch_intent
+from handlers.dispatch import dispatch_intent
 from services.logging_service import LoggingService
 from utils.time_utils import utc_now_iso
 
@@ -39,7 +39,7 @@ def _cache_recent_interaction(chat_id, intent, input_text):
             }))
             client.ltrim(key, 0, 9)
             client.expire(key, 86400)
-        except:
+        except Exception:
             pass
 
 
@@ -116,7 +116,7 @@ def _update_interaction_bg(request_id: str, status: str, latency: int, error: st
         }
         try:
             update_rows("user_interactions", payload, {"request_id": request_id})
-        except:
+        except Exception:
             pass
 
     threading.Thread(target=_do_update, daemon=True).start()

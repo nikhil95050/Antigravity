@@ -25,7 +25,7 @@ async def handle_movie(chat_id, input_text, session, user, **kwargs):
         return
     
     movie_service.add_to_history(chat_id, movies)
-    _update_last_recs(chat_id, session, movies)
+    _update_last_recs(chat_id, movies)
     await send_movies_async(chat_id, movies, f"If you liked <b>{title}</b>, I think these will be right up your alley:")
 
 async def handle_trending(chat_id, session, user, **kwargs):
@@ -75,7 +75,7 @@ async def handle_more_like(chat_id, input_text, session, user, **kwargs):
         full_list = await rec_service.get_recommendations(session, user, mode="similarity", seed_title=title)
         await _process_and_send_recs(chat_id, session, full_list, f"Expanding on the greatness of <b>{title}</b>:")
     else:
-        from telegram_helpers import answer_callback_query
+        from clients.telegram_helpers import answer_callback_query
         await answer_callback_query(kwargs.get("callback_query_id", ""), "Sorry, I lost the trail on that one. Try a new search?")
 
 async def handle_more_suggestions(chat_id, session, user, **kwargs):
@@ -89,7 +89,7 @@ async def handle_more_suggestions(chat_id, session, user, **kwargs):
     remaining = buffer[5:]
     
     enriched = await rec_service.enrich_movies(top_5, chat_id, "buffer_pull")
-    _update_last_recs_and_history(chat_id, session, enriched)
+    _update_last_recs_and_history(chat_id, enriched)
     session_service.upsert_session(chat_id, {"overflow_buffer_json": json.dumps(remaining)})
     
     await send_movies_async(chat_id, enriched, "<b>Wait, there's more! Here are a few more fascinating picks:</b>", include_more=bool(remaining))
@@ -109,7 +109,7 @@ async def handle_star(chat_id, input_text, session, user, **kwargs):
         return
     
     movie_service.add_to_history(chat_id, movies)
-    _update_last_recs(chat_id, session, movies)
+    _update_last_recs(chat_id, movies)
     await send_movies_async(chat_id, movies, f"Here are some of <b>{name}'s</b> most fascinating cinematic moments:")
 
 async def handle_share(chat_id, session, **kwargs):

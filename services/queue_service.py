@@ -30,6 +30,6 @@ def enqueue_job(func_name: str, *args, **kwargs):
     }
     try:
         client.rpush(QUEUE_NAME, json.dumps(job))
-        print(f"[Queue] Enqueued: {func_name}")
+        logger.info(f"Enqueued: {func_name}")
     except Exception as e:
-        print(f"[Queue] ❌ Enqueue failed for '{func_name}': {e}")
+        logger.error(f"Enqueue failed for '{func_name}': {e}")
